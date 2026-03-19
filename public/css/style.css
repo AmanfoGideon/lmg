@@ -1,0 +1,152 @@
+:root {
+    --mtn-yellow: #FFD700;
+    --black: #000000;
+    --dark-bg: #111;
+}
+
+/* Fullscreen reset */
+body, html {
+    height: 100%;
+    margin: 0;
+    font-family: 'Segoe UI', sans-serif;
+    overflow: hidden;
+    background: var(--dark-bg);
+}
+
+/* Background Canvas */
+#bgCanvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+
+/* Login Container */
+.login-container {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    text-align: center;
+    padding: 20px;
+}
+
+/* Logo Animation */
+.animated-logo {
+    width: 140px;
+    margin-bottom: 15px;
+    animation: logoBounce 1.5s ease forwards;
+}
+
+@keyframes logoBounce {
+    0% { opacity: 0; transform: translateY(-50px) scale(0.5);}
+    60% { opacity: 1; transform: translateY(10px) scale(1.1);}
+    100% { transform: translateY(0) scale(1);}
+}
+
+/* Text Animation */
+.animated-text {
+    opacity: 0;
+    animation: fadeInText 2s ease forwards;
+    animation-delay: 1s;
+}
+
+@keyframes fadeInText {
+    to { opacity: 1; }
+}
+
+.text-mtn-yellow {
+    color: var(--mtn-yellow);
+    font-size: 2.5rem;
+}
+
+/* Card wrapper for gradient background */
+.card-wrapper {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-top: 20px;
+}
+
+/* Soft animated gradient behind card */
+.card-bg {
+    position: absolute;
+    width: 420px;
+    height: 520px;
+    border-radius: 25px;
+    background: linear-gradient(45deg, #FFD700, #FFC300, #FFEB99, #FFD700);
+    filter: blur(50px);
+    animation: gradientMove 6s ease infinite;
+    z-index: 0;
+}
+
+@keyframes gradientMove {
+    0% { transform: rotate(0deg) translate(0,0);}
+    50% { transform: rotate(45deg) translate(20px, -20px);}
+    100% { transform: rotate(0deg) translate(0,0);}
+}
+
+/* Login Card */
+.login-card {
+    position: relative;
+    z-index: 1;
+    width: 380px;
+    border-radius: 25px;
+    padding: 40px 30px;
+    background: rgba(255,255,255,0.15);
+    backdrop-filter: blur(15px);
+    box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Hover shadow */
+.login-card:hover {
+    box-shadow: 0 25px 60px rgba(0,0,0,0.6);
+}
+
+/* Buttons */
+.btn-mtn-yellow {
+    background: linear-gradient(90deg, #FFD700, #FFC300);
+    color: #000;
+    font-size: 1.2rem;
+    border-radius: 15px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn-mtn-yellow:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 0 25px 5px #FFD700, 0 0 50px 10px #FFC300 inset;
+}
+
+/* Input focus glow */
+.form-control:focus {
+    border-color: var(--mtn-yellow);
+    box-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+}
+
+/* Floating labels */
+.form-floating > .form-control:focus ~ label,
+.form-floating > .form-control:not(:placeholder-shown) ~ label {
+    color: var(--mtn-yellow);
+    transform: translateY(-1.3rem) scale(0.85);
+}
+
+/* Responsive Mobile */
+@media(max-width: 992px) {
+    .login-card, .card-bg {
+        width: 90%;
+        height: auto;
+        padding: 30px 20px;
+    }
+}
+/* Ensure all table content is black for maximum visibility */
+table, table th, table td, table thead th, table tbody td, table tfoot td, table tr, table caption, table * {
+    color: #000 !important;
+}
+table a, table a * { color: #000 !important; }

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Offline — LMG Creative Media</title>
+<style>
+  :root { --bg:#0f1720; --brand:#FFD700; }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0f1720;color:#e6eef5;font-family:Segoe UI,system-ui,-apple-system,Arial}
+  .center{min-height:100vh;display:flex;align-items:center;justify-content:center}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:14px;padding:24px;text-align:center}
+  .btn{display:inline-block;padding:10px 14px;border-radius:10px;font-weight:600;text-decoration:none;transition:transform .15s ease, box-shadow .15s ease}
+  .btn-black{background:linear-gradient(180deg,#0b0b0b,#1a1a1a);color:#fff;border:1px solid #000}
+  .btn-black:hover{background:linear-gradient(180deg,#000,#151515);box-shadow:0 12px 26px rgba(0,0,0,0.6),0 0 20px rgba(255,215,0,0.25);transform:translateY(-1px)}
+  .text-muted{color:rgba(230,238,245,0.6)}
+</style>
+<link rel="icon" href="../favicon/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="../favicon/favicon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="../favicon/apple-touch-icon.png">
+</head>
+<body class="center">
+  <div class="card">
+    <img src="images/logo.png" alt="LMG Creative Media" style="width:96px;height:auto" class="mb-3">
+    <h1 class="h4 mb-2">You’re offline</h1>
+    <p class="text-muted mb-3">Some features may be unavailable. Please reconnect to continue.</p>
+    <a class="btn btn-black" href="dashboard.php">Try again</a>
+  </div>
+</body>
+</html>
