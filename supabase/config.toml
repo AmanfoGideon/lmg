@@ -1,0 +1,41 @@
+project_id = "lmg-business-management"
+
+[api]
+enabled = true
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://localhost:8080"
+additional_redirect_urls = ["http://127.0.0.1:8080/**", "http://localhost:8080/**"]
+enable_signup = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = true
+double_confirm_changes = true
+
+[functions.admin-users]
+verify_jwt = true
+
+[functions.admin-backup]
+verify_jwt = true
+
+[functions.email-send]
+verify_jwt = true
+
+[functions.sms-send]
+verify_jwt = true
+
+[functions.sms-dispatcher]
+verify_jwt = false

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Get Supabase Test Token</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; background: #0f1720; color: #e6eef5; }
+    .token-box { background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; margin: 20px 0; word-break: break-all; font-family: monospace; font-size: 12px; border: 1px solid rgba(255,215,0,0.3); }
+    button { background: linear-gradient(90deg, #FFD700, #FFC300); color: #0f1720; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 600; }
+    button:hover { filter: brightness(1.1); }
+    input { width: 100%; padding: 10px; margin: 10px 0; box-sizing: border-box; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: #e6eef5; border-radius: 6px; }
+    input:focus { outline: none; border-color: #FFD700; }
+    .hidden { display: none; }
+    .error { color: #ef4444; background: rgba(239,68,68,0.1); padding: 10px; border-radius: 6px; margin: 10px 0; }
+    .success { color: #22c55e; }
+    h1 { color: #FFD700; }
+    h2, h3 { color: #e6eef5; }
+    code { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-family: monospace; }
+    ol { line-height: 1.6; }
+    li { margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <h1>Get Supabase Test Token</h1>
+  <p>This tool helps you obtain a valid JWT access token for testing Edge Functions in the Supabase Dashboard.</p>
+
+  <div id="loginSection">
+    <h2>Step 1: Login</h2>
+    <input type="email" id="email" placeholder="Email">
+    <input type="password" id="password" placeholder="Password">
+    <button type="button" id="loginBtn">Login</button>
+  </div>
+
+  <div id="tokenSection" class="hidden">
+    <h2>Step 2: Copy Token</h2>
+    <p class="success">✓ Login successful! Here's your access token:</p>
+    <div class="token-box" id="token"></div>
+    <button type="button" id="copyBtn">Copy Token</button>
+    <p id="copyFeedback"></p>
+    <h3>How to use in Supabase Dashboard:</h3>
+    <ol>
+      <li>Go to your Edge Function in the Supabase Dashboard</li>
+      <li>Click the "Test" button</li>
+      <li>In the Headers section, add:</li>
+      <li><code>Authorization: Bearer <your-token></code></li>
+      <li>Send your test request</li>
+    </ol>
+  </div>
+
+  <div id="errorSection" class="hidden">
+    <p id="errorMessage"></p>
+  </div>
+
+  <script type="module">
+    // Use ES modules to avoid conflicts
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+    // Update these with your actual project values
+    const SUPABASE_URL = 'https://pscquoxeieesqfvdsddg.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzY3F1b3hlaWVlc3FmdmRzZGRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIwNjg1NTAsImV4cCI6MjEwNzY0NDU1MH0.OFOZkh_rOjtfEFSwS2Ry5452GqXKiBlfaPrXW5C9_ks';
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    async function login() {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+
+      if (!email || !password) {
+        showError('Please enter email and password');
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+        if (error) throw error;
+
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          showError('No session found');
+          return;
+        }
+
+        document.getElementById('loginSection').classList.add('hidden');
+        document.getElementById('tokenSection').classList.remove('hidden');
+        document.getElementById('token').textContent = session.access_token;
+      } catch (err) {
+        showError(err.message || 'Login failed');
+      }
+    }
+
+    function copyToken() {
+      const token = document.getElementById('token').textContent;
+      navigator.clipboard.writeText(token).then(() => {
+        document.getElementById('copyFeedback').textContent = '✓ Copied to clipboard!';
+        setTimeout(() => {
+          document.getElementById('copyFeedback').textContent = '';
+        }, 2000);
+      });
+    }
+
+    function showError(message) {
+      document.getElementById('errorSection').classList.remove('hidden');
+      document.getElementById('errorMessage').textContent = 'Error: ' + message;
+    }
+
+    // Attach event listeners
+    document.getElementById('loginBtn').addEventListener('click', login);
+    document.getElementById('copyBtn').addEventListener('click', copyToken);
+  </script>
+</body>
+</html>

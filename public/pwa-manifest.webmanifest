@@ -1,9 +1,9 @@
 {
   "name": "LMG Business Manager",
   "short_name": "LMG Manager",
-  "id": "lmgcm",
-  "start_url": "dashboard.php",
-  "scope": ".",
+  "id": "./",
+  "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#0f1720",
   "theme_color": "#0f1720",

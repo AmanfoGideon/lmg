@@ -5,6 +5,12 @@
 - Modules: Dashboard, Invoices, Transactions, Clients, Products, SMS, Reports, Backup
 - Standards: Prepared statements, CSRF protection, secure sessions, JSON interop, accessibility hints
 
+## Supabase Migration Status
+- A parallel static Supabase application is under `public/`; configure its public URL/key in the ignored `public/js/config.js` and serve `public/` as the static document root.
+- PostgreSQL schema/RLS/RPC migration, Supabase Auth client, Edge Functions, and an isolated data-import utility are present. They have not been deployed or tested against a Supabase project.
+- The PHP/MariaDB application remains the active rollback path. Do not remove it until the legacy database is exported and verified, data has been imported, and all Supabase workflows and permission tests pass.
+- See `docs/MIGRATION_CHECKLIST.md` for feature mapping and current blockers, and `docs/SUPABASE_DEPLOYMENT.md` for setup and cutover steps.
+
 ## Configuration
 - Environment file: `includes.env` supports keys:
   - DB_HOST, DB_USER, DB_PASSWORD, DB_NAME

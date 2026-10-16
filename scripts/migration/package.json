@@ -1,0 +1,12 @@
+{
+  "name": "lmg-business-migration-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "migrate": "node migrate_mysql_to_supabase.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.0",
+    "mysql2": "^3.14.0"
+  }
+}

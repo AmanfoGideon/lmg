@@ -1,0 +1,10 @@
+/node_modules/
+/dist/
+/scripts/migration/node_modules/
+# Allow committing migration helper lockfile if dependencies are installed
+# /scripts/migration/package-lock.json
+/\.env
+/private/
+/supabase/.temp/
+/supabase/.branches/
+*.log

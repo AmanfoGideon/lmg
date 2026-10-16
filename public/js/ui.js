@@ -31,6 +31,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const collapsed = localStorage.getItem('sidebarCollapsed') === '1';
     sidebar.classList.toggle('collapsed', collapsed);
+    
+    // Handle tooltips for collapsed state
+    document.querySelectorAll('.sidebar .nav-link').forEach(link => {
+      const text = link.querySelector('.nav-text')?.textContent;
+      if (collapsed) {
+        link.setAttribute('title', text || '');
+      } else {
+        link.removeAttribute('title');
+      }
+    });
+
     if (toggleBtn) {
       toggleBtn.innerHTML = collapsed ? '<i class="bi bi-chevron-right"></i>' : '<i class="bi bi-chevron-left"></i>';
       toggleBtn.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';

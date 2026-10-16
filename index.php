@@ -64,12 +64,24 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link rel="stylesheet" href="public/css/style.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-<link rel="manifest" href="public/pwa-manifest.webmanifest">
-<link rel="icon" href="favicon/favicon.ico" sizes="any">
-<link rel="icon" type="image/svg+xml" href="favicon/favicon.svg">
-<link rel="icon" type="image/png" sizes="96x96" href="favicon/favicon-96x96.png">
-<link rel="apple-touch-icon" sizes="180x180" href="favicon/apple-touch-icon.png">
-<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js');}</script>
+<style>
+    /* Critical CSS for PHP Login */
+    :root {
+        --bg-dark: #0a0f14;
+        --accent: #FFD700;
+        --text-main: #e6eef5;
+    }
+    body { background: var(--bg-dark) !important; color: var(--text-main) !important; margin: 0; font-family: 'Inter', sans-serif; min-height: 100vh; }
+    .login-container { opacity: 0; transition: opacity 0.5s ease; }
+    body.loaded .login-container { opacity: 1; }
+    #bgCanvas { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+</style>
+<script>
+    if('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('public/sw.js');
+    }
+    window.addEventListener('load', () => { document.body.classList.add('loaded'); });
+</script>
 </head>
 <body>
 

@@ -5,6 +5,11 @@
 - Install as an app via the “Install App” button (where available)
 - The application works offline for selected actions (PWA support)
 
+## Supabase Migration Preview
+- The static Supabase build is `public/index.html` and `public/app.html`; the existing PHP app remains the active system until migration validation is complete.
+- Supabase login uses invited, verified email accounts. Legacy username/password hashes are not transferred; each migrated account must set a new password.
+- The static build is not production-ready until its public project URL/key are configured, the database is migrated, Edge Function secrets are set, and the tests in the migration checklist pass.
+
 ## Dashboard
 - Overview cards show Income, Expenses, Profit, Pending Invoices
 - Period filter: Week, Month, Year — affects stats and charts

@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f1720">
+  <title>Business Management | LMG Creative Media</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="js/vendor.css">
+  <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/invoice-premium.css">
+  <link rel="manifest" href="pwa-manifest.webmanifest">
+  <link rel="icon" href="favicon/favicon.svg" type="image/svg+xml">
+  <style>
+    /* Premium Critical CSS */
+    :root {
+      --bg-dark: #0a0f14;
+      --accent: #FFD700;
+      --text-main: #e6eef5;
+    }
+    body { background: var(--bg-dark); color: var(--text-main); margin: 0; font-family: 'Inter', sans-serif; }
+    .loading-screen { 
+      position: fixed; 
+      inset: 0; 
+      background: var(--bg-dark); 
+      display: flex; 
+      align-items: center; 
+      justify-content: center; 
+      z-index: 9999; 
+      transition: opacity 0.3s ease;
+    }
+    .loading-spinner { 
+      width: 48px; 
+      height: 48px; 
+      border: 4px solid rgba(255,215,0,0.1); 
+      border-top-color: var(--accent); 
+      border-radius: 50%; 
+      animation: spin 1s linear infinite; 
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .app-shell { opacity: 0; transition: opacity 0.5s ease; }
+    body.loaded .app-shell { opacity: 1; }
+  </style>
+</head>
+<body class="d-flex flex-column">
+  <div id="loadingScreen" class="loading-screen">
+    <div class="loading-spinner"></div>
+  </div>
+
+  <div class="nav-overlay"></div>
+  <div class="app-shell d-flex">
+    <aside id="appSidebar" class="sidebar d-flex flex-column p-3">
+      <div class="brand d-flex align-items-center mb-3">
+        <a href="app.html" class="d-flex align-items-center text-decoration-none">
+          <img src="images/logo.png" alt="LMG" class="brand-logo me-2">
+          <div><div class="brand-name">LMG</div><small class="text-muted">Creative Media</small></div>
+        </a>
+      </div>
+      <nav class="nav flex-column" aria-label="Main navigation">
+        <a class="nav-link" href="#dashboard" data-view-link="dashboard"><i class="bi bi-speedometer2"></i><span class="nav-text">Dashboard</span></a>
+        <a class="nav-link" href="#clients" data-view-link="clients"><i class="bi bi-people"></i><span class="nav-text">Clients</span></a>
+        <a class="nav-link" href="#products" data-view-link="products"><i class="bi bi-box-seam"></i><span class="nav-text">Products</span></a>
+        <a class="nav-link" href="#transactions" data-view-link="transactions"><i class="bi bi-wallet2"></i><span class="nav-text">Transactions</span></a>
+        <a class="nav-link" href="#invoices" data-view-link="invoices"><i class="bi bi-receipt"></i><span class="nav-text">Invoices</span></a>
+        <a class="nav-link" href="#reports" data-view-link="reports"><i class="bi bi-bar-chart-line"></i><span class="nav-text">Reports</span></a>
+        <a class="nav-link" href="#sms" data-view-link="sms"><i class="bi bi-chat-dots"></i><span class="nav-text">SMS</span></a>
+        <a class="nav-link d-none" id="adminUsersNav" href="#users" data-view-link="users"><i class="bi bi-people-gear"></i><span class="nav-text">Users</span></a>
+        <a class="nav-link d-none" id="adminBackupNav" href="#backup" data-view-link="backup"><i class="bi bi-database-lock"></i><span class="nav-text">Backup</span></a>
+      </nav>
+      <div class="account-panel">
+        <div class="account-user">
+          <img src="images/logo.png" alt="" class="avatar">
+          <div class="account-meta">
+            <div id="profileName" class="account-name">Loading account...</div>
+            <div id="profileEmailSmall" class="account-email"></div>
+          </div>
+        </div>
+        <div class="account-actions">
+          <a class="account-action" href="#profile" data-view-link="profile" title="Profile" aria-label="Profile"><i class="bi bi-person-circle" aria-hidden="true"></i><span>Profile</span></a>
+          <button id="signOutButton" class="account-action account-action--danger" type="button" title="Sign Out" aria-label="Sign Out"><i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>Sign Out</span></button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main flex-grow-1 p-4">
+      <header class="d-flex align-items-center justify-content-between mb-4">
+        <div><h1 id="pageTitle" class="h2 mb-0">Clients</h1><small id="pageSubtitle" class="text-muted">Manage client records</small></div>
+        <div class="d-flex align-items-center gap-3">
+          <button id="btnSidebarToggle" class="btn btn-outline-light" aria-label="Toggle sidebar" aria-controls="appSidebar"><i class="bi bi-chevron-left"></i></button>
+          <span id="headerName" class="fw-bold"></span>
+          <img src="images/logo.png" alt="LMG" class="avatar">
+        </div>
+      </header>
+
+      <div id="notice" class="alert d-none" role="alert" aria-live="polite"></div>
+      <div id="fatalNotice" class="alert alert-danger d-none" role="alert"></div>
+
+      <section id="view-dashboard" class="app-view d-none">
+        <div class="d-flex justify-content-end mb-3">
+          <label class="visually-hidden" for="dashboardPeriod">Dashboard period</label>
+          <select id="dashboardPeriod" class="form-select form-select-sm" style="width:auto"><option value="week">Week</option><option value="month" selected>Month</option><option value="year">Year</option></select>
+        </div>
+        <div class="row g-3">
+          <div class="col-12 col-sm-6 col-lg-3">
+            <div class="stat-card stat-card--icon stat-card--positive">
+              <span class="stat-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+              <div class="stat-body">
+                <div class="stat-title">Income</div>
+                <div id="statIncome" class="stat-value is-loading">--</div>
+                <span id="statIncomeTrend" class="stat-trend d-none"></span>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-lg-3">
+            <div class="stat-card stat-card--icon stat-card--negative">
+              <span class="stat-icon"><i class="bi bi-credit-card" aria-hidden="true"></i></span>
+              <div class="stat-body">
+                <div class="stat-title">Expenses</div>
+                <div id="statExpenses" class="stat-value is-loading">--</div>
+                <span id="statExpensesTrend" class="stat-trend d-none"></span>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-lg-3">
+            <div class="stat-card stat-card--icon stat-card--accent">
+              <span class="stat-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
+              <div class="stat-body">
+                <div class="stat-title">Profit</div>
+                <div id="statProfit" class="stat-value is-loading">--</div>
+                <div id="statProfitNote" class="stat-note d-none"></div>
+                <span id="statProfitTrend" class="stat-trend d-none"></span>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-lg-3">
+            <a class="stat-card stat-card--icon stat-card--info" href="#invoices" data-view-link="invoices" aria-label="View pending invoices">
+              <span class="stat-icon"><i class="bi bi-hourglass-split" aria-hidden="true"></i></span>
+              <div class="stat-body">
+                <div class="stat-title">Pending Invoices</div>
+                <div id="statInvoices" class="stat-value is-loading">--</div>
+                <div class="stat-note">Unpaid or partially paid</div>
+              </div>
+            </a>
+          </div>
+        </div>
+        <div class="row g-3 mt-1">
+          <div class="col-12 col-sm-6 col-lg-3">
+            <div class="stat-card stat-card--icon stat-card--positive">
+              <span class="stat-icon"><i class="bi bi-cash-stack" aria-hidden="true"></i></span>
+              <div class="stat-body">
+                <div class="stat-title">Weekly Income</div>
+                <div id="weekIncome" class="stat-value is-loading">--</div>
+                <div id="weekIncomeNote" class="stat-note d-none"></div>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-lg-3">
+            <div class="stat-card stat-card--icon stat-card--negative">
+              <span class="stat-icon"><i class="bi bi-wallet2" aria-hidden="true"></i></span>
+              <div class="stat-body">
+                <div class="stat-title">Weekly Expenses</div>
+                <div id="weekExpense" class="stat-value is-loading">--</div>
+                <div id="weekExpenseNote" class="stat-note d-none"></div>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-lg-3">
+            <div class="stat-card stat-card--icon stat-card--accent">
+              <span class="stat-icon"><i class="bi bi-graph-up" aria-hidden="true"></i></span>
+              <div class="stat-body">
+                <div class="stat-title">Weekly Profit</div>
+                <div id="weekProfit" class="stat-value is-loading">--</div>
+                <div id="weekProfitNote" class="stat-note d-none"></div>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-lg-3">
+            <a class="stat-card stat-card--icon stat-card--warning" href="#products" data-view-link="products" aria-label="View low stock products">
+              <span class="stat-icon"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
+              <div class="stat-body">
+                <div class="stat-title">Low Stock</div>
+                <div id="lowStockSummary" class="stat-value is-loading">--</div>
+                <div class="stat-note">At or below minimum</div>
+              </div>
+            </a>
+          </div>
+        </div>
+        <div class="row g-3 mt-1">
+          <div class="col-xl-8"><div class="card p-3 h-100"><h2 class="h6">Income and Expenses</h2><div style="height:300px"><canvas id="dashboardChart" aria-label="Income and expense chart"></canvas></div></div></div>
+          <div class="col-xl-4"><div class="card p-3 h-100"><h2 class="h6">Weekly Trend</h2><div style="height:300px"><canvas id="weeklyChart" aria-label="Weekly profit trend"></canvas></div></div></div>
+          <div class="col-xl-6"><div class="card p-3"><div class="d-flex justify-content-between align-items-center mb-3"><h2 class="h6 mb-0">Recent Transactions</h2><a href="#transactions" class="btn btn-sm btn-outline-light" data-view-link="transactions">View All</a></div><div class="table-responsive"><table class="table table-sm table-brand"><thead><tr><th>Client</th><th>Type</th><th>Amount</th><th>Date</th></tr></thead><tbody id="dashboardTransactions"></tbody></table></div></div></div>
+          <div class="col-xl-3"><div class="card p-3"><h2 class="h6">Top Clients</h2><ul id="dashboardTopClients" class="list-unstyled mb-0"></ul></div></div>
+          <div class="col-xl-3"><div class="card p-3"><h2 class="h6">Recent Activity</h2><ul id="dashboardActivity" class="list-unstyled mb-0"></ul><hr><h3 class="h6">Low Stock</h3><ul id="dashboardLowStock" class="list-unstyled mb-0"></ul></div></div>
+        </div>
+      </section>
+
+      <section id="view-clients" class="app-view">
+        <div class="row g-3">
+          <div class="col-lg-4">
+            <div class="card p-3">
+              <h2 id="clientFormTitle" class="h6 mb-3">Add Client</h2>
+              <form id="clientForm" class="row g-2">
+                <div class="col-12"><label class="form-label" for="clientName">Full name</label><input class="form-control" id="clientName" name="full_name" maxlength="255" required></div>
+                <div class="col-md-6"><label class="form-label" for="clientPhone">Phone</label><input class="form-control" id="clientPhone" name="phone" maxlength="50"></div>
+                <div class="col-md-6"><label class="form-label" for="clientEmail">Email</label><input class="form-control" id="clientEmail" name="email" type="email" maxlength="255"></div>
+                <div class="col-12"><label class="form-label" for="clientAddress">Address</label><textarea class="form-control" id="clientAddress" name="address" rows="3"></textarea></div>
+                <div class="col-12 d-flex gap-2"><button class="btn btn-primary flex-grow-1" type="submit">Save Client</button><button class="btn btn-outline-light d-none" id="cancelClientEdit" type="button">Cancel</button></div>
+              </form>
+            </div>
+          </div>
+          <div class="col-lg-8">
+            <div class="card p-3">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                <div><h2 class="h6 mb-1">All Clients</h2><small id="clientCount" class="text-muted">Loading...</small></div>
+                <div class="d-flex flex-wrap gap-2">
+                  <input id="clientSearch" class="form-control form-control-sm" type="search" placeholder="Search clients" aria-label="Search clients">
+                  <select id="clientLimit" class="form-select form-select-sm" aria-label="Rows per page" style="width:auto"><option>10</option><option selected>25</option><option>50</option><option>100</option></select>
+                  <button id="clientCsvExport" class="btn btn-sm btn-outline-light" type="button"><i class="bi bi-filetype-csv"></i> CSV</button>
+                  <button id="clientExcelExport" class="btn btn-sm btn-outline-light" type="button"><i class="bi bi-file-earmark-excel"></i> Excel</button>
+                  <button id="clientPrint" class="btn btn-sm btn-outline-light" type="button"><i class="bi bi-printer"></i> Print</button>
+                  <label class="btn btn-sm btn-outline-light mb-0"><i class="bi bi-upload"></i> Import CSV<input id="clientCsvImport" type="file" accept=".csv,text/csv" hidden></label>
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-borderless table-sm table-striped table-hover table-brand align-middle">
+                  <thead><tr class="text-muted small"><th>Name</th><th>Phone</th><th>Email</th><th>Address</th><th>Actions</th></tr></thead>
+                  <tbody id="clientRows"><tr><td colspan="5" class="text-muted">Loading clients...</td></tr></tbody>
+                </table>
+              </div>
+              <div class="d-flex justify-content-between align-items-center">
+                <small id="clientPageLabel" class="text-muted"></small>
+                <div class="d-flex gap-2"><button id="clientPrevious" class="btn btn-sm btn-outline-light" type="button">Previous</button><button id="clientNext" class="btn btn-sm btn-outline-light" type="button">Next</button></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-products" class="app-view d-none">
+        <div class="row g-3">
+          <div class="col-lg-4">
+            <div class="card p-3">
+              <h2 class="h6 mb-3">Add Product</h2>
+              <form id="productForm" class="row g-2">
+                <div class="col-12"><label class="form-label" for="productName">Product name</label><input class="form-control" id="productName" name="name" maxlength="255" required></div>
+                <div class="col-12"><label class="form-label" for="productSku">SKU</label><input class="form-control" id="productSku" name="sku" maxlength="100"></div>
+                <div class="col-12"><label class="form-label" for="productPrice">Price</label><input class="form-control" id="productPrice" name="price" type="number" min="0" step="0.01" required></div>
+                <div class="col-6"><label class="form-label" for="productStock">Stock</label><input class="form-control" id="productStock" name="stock" type="number" min="0" step="1" value="0" required></div>
+                <div class="col-6"><label class="form-label" for="productMinStock">Minimum</label><input class="form-control" id="productMinStock" name="min_stock" type="number" min="0" step="1" value="0" required></div>
+                <div class="col-12"><button class="btn btn-primary w-100" type="submit">Add Product</button></div>
+              </form>
+            </div>
+            <div class="card p-3 mt-3"><div class="stat-title">Low Stock Alerts</div><div id="lowStockCount" class="stat-value">0</div><div class="stat-sub">At or below minimum</div></div>
+          </div>
+          <div class="col-lg-8">
+            <div class="card p-3">
+              <h2 class="h6 mb-3">All Products</h2>
+              <div class="table-responsive"><table class="table table-borderless table-sm table-striped table-hover table-brand align-middle"><thead><tr class="text-muted small"><th>Name</th><th>SKU</th><th>Price</th><th>Stock</th><th>Minimum</th><th>Actions</th></tr></thead><tbody id="productRows"><tr><td colspan="6" class="text-muted">Loading products...</td></tr></tbody></table></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-transactions" class="app-view d-none">
+        <div class="row g-3">
+          <div class="col-lg-4">
+            <div class="card p-3">
+              <h2 class="h6 mb-3">Add Transaction</h2>
+              <form id="transactionForm" class="row g-2">
+                <div class="col-12"><label class="form-label" for="transactionClient">Client</label><select class="form-select" id="transactionClient" name="client_id" required></select></div>
+                <div class="col-12 d-none" id="transactionNewClientWrap"><label class="form-label" for="transactionNewClient">New client name</label><input class="form-control" id="transactionNewClient" name="client_name" maxlength="255"></div>
+                <div class="col-md-6"><label class="form-label" for="transactionAmount">Amount</label><input class="form-control" id="transactionAmount" name="amount" type="number" step="0.01" required></div>
+                <div class="col-md-6"><label class="form-label" for="transactionType">Type</label><select class="form-select" id="transactionType" name="type"><option value="income">Income</option><option value="expense">Expense</option><option value="invoice">Invoice</option><option value="payment">Payment</option></select></div>
+                <div class="col-12" id="transactionInvoiceWrap"><label class="form-label" for="transactionInvoice">Invoice (optional)</label><select class="form-select" id="transactionInvoice" name="invoice_id"></select></div>
+                <div class="col-md-6"><label class="form-label" for="transactionMethod">Payment method</label><select class="form-select" id="transactionMethod" name="payment_method"><option value="">Not specified</option><option value="cash">Cash</option><option value="mobile">Mobile</option><option value="card">Card</option></select></div>
+                <div class="col-md-6"><label class="form-label" for="transactionDate">Date</label><input class="form-control" id="transactionDate" name="date" type="date" required></div>
+                <div class="col-12"><label class="form-label" for="transactionDescription">Description</label><textarea class="form-control" id="transactionDescription" name="description"></textarea></div>
+                <div class="col-12"><button class="btn btn-primary w-100" type="submit">Save Transaction</button></div>
+              </form>
+            </div>
+          </div>
+          <div class="col-lg-8"><div class="card p-3"><div class="d-flex justify-content-between mb-3"><h2 class="h6 mb-0">Recent Transactions</h2><input class="form-control form-control-sm" id="transactionSearch" type="search" placeholder="Search transactions" style="max-width:260px"></div><div class="table-responsive"><table class="table table-sm table-brand align-middle"><thead><tr><th>Client</th><th>Type</th><th>Invoice</th><th>Amount</th><th>Date</th><th>Method</th><th>Description</th><th>Actions</th></tr></thead><tbody id="transactionRows"></tbody></table></div></div></div>
+        </div>
+      </section>
+
+      <section id="view-invoices" class="app-view d-none">
+        <div class="card p-3">
+          <div class="d-flex justify-content-between align-items-center mb-3"><div><h2 class="h6 mb-1">Invoices</h2><small class="text-muted">Create, track, and record payments</small></div><button id="toggleInvoiceForm" class="btn btn-primary" type="button"><i class="bi bi-plus-lg"></i> New Invoice</button></div>
+          <form id="invoiceForm" class="row g-3 mb-4 d-none">
+            <div class="col-md-4"><label class="form-label" for="invoiceClient">Client</label><select class="form-select" id="invoiceClient" name="client_id" required></select></div>
+            <div class="col-md-4 d-none" id="invoiceNewClientWrap"><label class="form-label" for="invoiceNewClient">New client name</label><input class="form-control" id="invoiceNewClient" name="client_name" maxlength="255"></div>
+            <div class="col-md-4"><label class="form-label" for="invoiceDate">Invoice date</label><input class="form-control" id="invoiceDate" name="invoice_date" type="date" required></div>
+            <div class="col-md-4"><label class="form-label" for="invoiceDueDate">Due date</label><input class="form-control" id="invoiceDueDate" name="due_date" type="date"></div>
+            <div class="col-12"><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th></th></tr></thead><tbody id="invoiceItemRows"></tbody></table></div><button class="btn btn-sm btn-outline-light" id="addInvoiceItem" type="button"><i class="bi bi-plus-lg"></i> Add Item</button></div>
+            <div class="col-md-4"><label class="form-label" for="invoiceTax">Tax</label><input class="form-control" id="invoiceTax" name="tax" type="number" min="0" step="0.01" value="0"></div>
+            <div class="col-md-4"><label class="form-label" for="invoiceTotal">Subtotal + tax</label><input class="form-control" id="invoiceTotal" readonly></div>
+            <div class="col-md-4"><label class="form-label" for="invoiceNotes">Notes</label><input class="form-control" id="invoiceNotes" name="notes"></div>
+            <div class="col-12"><button class="btn btn-primary" type="submit">Create Invoice</button></div>
+          </form>
+          <div class="table-responsive"><table class="table table-sm table-brand align-middle"><thead><tr><th>Number</th><th>Client</th><th>Date</th><th>Due</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody id="invoiceRows"></tbody></table></div>
+        </div>
+        <div id="invoiceDetails" class="card p-3 mt-3 d-none"></div>
+      </section>
+
+      <section id="view-reports" class="app-view d-none">
+        <div class="card p-3 mb-3"><form id="reportFilter" class="row g-2 align-items-end"><div class="col-md-3"><label class="form-label" for="reportGroup">Group</label><select class="form-select" id="reportGroup"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div><div class="col-md-3"><label class="form-label" for="reportStart">Start</label><input class="form-control" id="reportStart" type="date" required></div><div class="col-md-3"><label class="form-label" for="reportEnd">End</label><input class="form-control" id="reportEnd" type="date" required></div><div class="col-md-3"><label class="form-label" for="reportBranch">Branch</label><select class="form-select" id="reportBranch"><option value="">All branches</option></select></div><div class="col-12 d-flex gap-2"><button class="btn btn-primary" type="submit">Apply</button><button id="reportExport" class="btn btn-outline-light" type="button"><i class="bi bi-filetype-csv"></i> Export CSV</button><button id="reportPrint" class="btn btn-outline-light" type="button"><i class="bi bi-printer"></i> Print</button></div></form></div>
+        <div class="row g-3 mb-3"><div class="col-md-3"><div class="stat-card p-3"><div class="stat-title">Income</div><div id="reportIncome" class="stat-value">--</div></div></div><div class="col-md-3"><div class="stat-card p-3"><div class="stat-title">Expenses</div><div id="reportExpense" class="stat-value">--</div></div></div><div class="col-md-3"><div class="stat-card p-3"><div class="stat-title">Profit</div><div id="reportProfit" class="stat-value">--</div></div></div><div class="col-md-3"><div class="stat-card p-3"><div class="stat-title">Transactions</div><div id="reportCount" class="stat-value">--</div></div></div></div>
+        <div class="card p-3"><div class="table-responsive"><table class="table table-sm table-brand"><thead><tr><th>Period</th><th>Income</th><th>Expense</th><th>Profit</th><th>Transactions</th></tr></thead><tbody id="reportRows"></tbody></table></div></div>
+      </section>
+
+      <section id="view-sms" class="app-view d-none">
+        <div class="d-flex justify-content-end mb-3"><button id="smsConnectivity" class="btn btn-sm btn-outline-light" type="button"><i class="bi bi-plug"></i> Connectivity Check</button></div>
+        <div class="row g-3">
+          <div class="col-xl-5">
+            <div class="card p-3 mb-3"><h2 class="h6 mb-3">Send SMS</h2><form id="smsForm" class="row g-2">
+              <div class="col-12"><label class="form-label" for="smsClients">Select clients</label><select class="form-select" id="smsClients" multiple size="6"></select></div>
+              <div class="col-12"><label class="form-label" for="smsPhones">Other phone numbers</label><textarea class="form-control" id="smsPhones" rows="2" placeholder="Comma, semicolon, or newline separated"></textarea></div>
+              <div class="col-12"><label class="form-label" for="smsMessage">Message</label><textarea class="form-control" id="smsMessage" maxlength="1600" rows="4" required></textarea><small class="text-muted">Maximum 1,600 characters</small></div>
+              <div class="col-md-7"><label class="form-label" for="smsSchedule">Schedule</label><input class="form-control" id="smsSchedule" type="datetime-local"></div>
+              <div class="col-md-5 d-flex align-items-end"><button class="btn btn-primary w-100" type="submit">Send</button></div>
+            </form></div>
+          </div>
+          <div class="col-xl-7"><div class="card p-3"><div class="d-flex justify-content-between align-items-center mb-3"><h2 class="h6 mb-0">SMS Logs</h2><input id="smsSearch" class="form-control form-control-sm" type="search" placeholder="Search phone, status, message" style="max-width:280px"></div><div class="table-responsive"><table class="table table-sm table-brand"><thead><tr><th>Phone</th><th>Status</th><th>Provider</th><th>Message</th><th>Date</th></tr></thead><tbody id="smsRows"></tbody></table></div></div></div>
+        </div>
+      </section>
+
+      <section id="view-users" class="app-view d-none">
+        <div class="row g-3"><div class="col-lg-4"><div class="card p-3"><h2 id="userFormTitle" class="h6 mb-3">Add User</h2>
+          <div class="btn-group w-100 mb-3" role="group">
+            <input type="radio" class="btn-check" name="userMethod" id="methodInvite" value="invite" checked>
+            <label class="btn btn-outline-light" for="methodInvite">Send Invitation</label>
+            <input type="radio" class="btn-check" name="userMethod" id="methodCreate" value="create">
+            <label class="btn btn-outline-light" for="methodCreate">Create Manually</label>
+          </div>
+          <form id="userInviteForm" class="row g-2">
+            <input type="hidden" id="editUserId" name="user_id">
+            <div class="col-12"><label class="form-label" for="inviteName">Full name</label><input class="form-control" id="inviteName" name="full_name" required></div>
+            <div class="col-12"><label class="form-label" for="inviteUsername">Username</label><input class="form-control" id="inviteUsername" name="username" required></div>
+            <div class="col-12"><label class="form-label" for="inviteEmail">Email</label><input class="form-control" id="inviteEmail" name="email" type="email" required></div>
+            <div class="col-12" id="passwordField" style="display:none"><label class="form-label" for="invitePassword">Password</label><input class="form-control" id="invitePassword" name="password" type="password" minlength="6"><small class="text-muted" id="passwordHelp">Minimum 6 characters</small></div>
+            <div class="col-md-6"><label class="form-label" for="inviteRole">Role</label><select class="form-select" id="inviteRole" name="role"><option value="staff">Staff</option><option value="admin">Admin</option></select></div>
+            <div class="col-md-6"><label class="form-label" for="inviteStatus">Status</label><select class="form-select" id="inviteStatus" name="status"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+            <div class="col-12"><label class="form-label" for="inviteBranch">Branch</label><input class="form-control" id="inviteBranch" name="branch"></div>
+            <div class="col-12 d-flex gap-2">
+              <button class="btn btn-primary flex-grow-1" type="submit" id="userSubmitBtn">Send Invitation</button>
+              <button class="btn btn-outline-light d-none" type="button" id="cancelUserEdit">Cancel</button>
+            </div>
+          </form></div></div>
+          <div class="col-lg-8">
+            <div class="card p-3">
+              <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2 class="h6 mb-0">User Accounts</h2>
+                <input id="userSearch" class="form-control form-control-sm" type="search" placeholder="Search users" style="max-width:280px">
+              </div>
+              <div class="table-responsive"><table class="table table-sm table-brand"><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>Role</th><th>Status</th><th>Branch</th><th>Actions</th></tr></thead><tbody id="userRows"></tbody></table></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-backup" class="app-view d-none"><div class="card p-3"><h2 class="h6">Data Export</h2><p class="text-muted">Exports are restricted by your administrator role and current row-level policies.</p><div id="backupActions" class="d-flex flex-wrap gap-2"></div></div></section>
+
+      <section id="view-profile" class="app-view d-none">
+        <div class="row g-3">
+          <div class="col-lg-7">
+            <div class="card p-3">
+              <h2 class="h6 mb-3">Account Details</h2>
+              <form id="profileForm" class="row g-3">
+                <div class="col-md-6"><label class="form-label" for="profileFullName">Full name</label><input class="form-control" id="profileFullName" name="full_name" required></div>
+                <div class="col-md-6"><label class="form-label" for="profileEmail">Email</label><input class="form-control" id="profileEmail" name="email" type="email" required></div>
+                <div class="col-md-6"><label class="form-label" for="profilePhone">Phone</label><input class="form-control" id="profilePhone" name="phone"></div>
+                <div class="col-md-6"><label class="form-label" for="profileRole">Role</label><input class="form-control" id="profileRole" disabled></div>
+                <div class="col-12"><button class="btn btn-primary" type="submit">Save Details</button></div>
+              </form>
+            </div>
+          </div>
+          <div class="col-lg-5">
+            <div class="card p-3">
+              <h2 class="h6 mb-3">Change Password</h2>
+              <form id="passwordForm" class="row g-3">
+                <div class="col-12"><label class="form-label" for="profilePassword">New password</label><input class="form-control" id="profilePassword" name="password" type="password" autocomplete="new-password" minlength="12" required></div>
+                <div class="col-12"><button class="btn btn-primary" type="submit">Update Password</button></div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="modal fade" id="editTransactionModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content"><form id="editTransactionForm">
+      <div class="modal-header"><h2 class="modal-title h5">Edit Transaction</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+      <div class="modal-body row g-2">
+        <input id="editTransactionId" type="hidden">
+        <div class="col-12"><label class="form-label" for="editTransactionClient">Client</label><input class="form-control" id="editTransactionClient" disabled></div>
+        <div class="col-md-6"><label class="form-label" for="editTransactionAmount">Amount</label><input class="form-control" id="editTransactionAmount" type="number" step="0.01" required></div>
+        <div class="col-md-6"><label class="form-label" for="editTransactionType">Type</label><select class="form-select" id="editTransactionType"><option value="income">Income</option><option value="expense">Expense</option><option value="invoice">Invoice</option><option value="payment">Payment</option></select></div>
+        <div class="col-12"><label class="form-label" for="editTransactionInvoice">Invoice</label><select class="form-select" id="editTransactionInvoice"></select></div>
+        <div class="col-md-6"><label class="form-label" for="editTransactionMethod">Method</label><select class="form-select" id="editTransactionMethod"><option value="">Not specified</option><option value="cash">Cash</option><option value="mobile">Mobile</option><option value="card">Card</option></select></div>
+        <div class="col-md-6"><label class="form-label" for="editTransactionDate">Date</label><input class="form-control" id="editTransactionDate" type="date" required></div>
+        <div class="col-12"><label class="form-label" for="editTransactionDescription">Description</label><textarea class="form-control" id="editTransactionDescription"></textarea></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-outline-light" type="button" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" type="submit">Save Changes</button></div>
+    </form></div></div>
+  </div>
+  <script src="js/config.js"></script>
+  <script type="module" src="js/workspace.js"></script>
+  <script>
+    // Fallback reveal: workspace.js hides this screen as soon as the first view is ready.
+    window.addEventListener('load', () => {
+      document.body.classList.add('loaded');
+      const loadingScreen = document.getElementById('loadingScreen');
+      if (loadingScreen) {
+        loadingScreen.style.opacity = '0';
+        setTimeout(() => loadingScreen.remove(), 300);
+      }
+    });
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>
