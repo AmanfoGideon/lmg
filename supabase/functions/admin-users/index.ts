@@ -3,16 +3,20 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Shared configuration (inlined for manual deployment)
 const projectUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const allowedOrigins = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+const defaultAllowedOrigins = [
+  "https://lmg-ecru.vercel.app",
+];
+const envAllowedOrigins = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envAllowedOrigins])];
 const adminClient = projectUrl && serviceRoleKey
   ? createClient(projectUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } })
   : null;
 
 function response(body: unknown, status: number, origin: string | null) {
-  const corsOrigin = origin && allowedOrigins.includes(origin) ? origin : "null";
+  const corsOrigin = origin && allowedOrigins.includes(origin) ? origin : "";
   return new Response(status === 204 ? null : JSON.stringify(body), {
     status,
     headers: {
@@ -27,7 +31,17 @@ function response(body: unknown, status: number, origin: string | null) {
 
 Deno.serve(async (request) => {
   const origin = request.headers.get("origin");
-  if (request.method === "OPTIONS") return response({}, 204, origin);
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": origin ?? "",
+        "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Vary": "Origin",
+      },
+    });
+  }
   if (request.method !== "POST") return response({ error: "Method not allowed." }, 405, origin);
   if (!adminClient) return response({ error: "Function configuration is incomplete." }, 500, origin);
   if (origin && !allowedOrigins.includes(origin)) return response({ error: "Origin is not allowed." }, 403, origin);

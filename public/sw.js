@@ -1,7 +1,7 @@
 // Single service worker for both the static Supabase app (dist/) and the PHP pages (/public/).
 // Asset URLs are scope-relative so the same file works whether it is served from the
 // site root or from the /public/ directory.
-const CACHE_NAME = "lmg-cm-v3";
+const CACHE_NAME = "lmg-cm-v4";
 const CORE_ASSETS = [
   "./",
   "./index.html",
@@ -9,6 +9,11 @@ const CORE_ASSETS = [
   "./offline.html",
   "./pwa-manifest.webmanifest",
   "./js/config.js",
+  "./js/vendor.css",
+  "./css/theme.css",
+  "./css/invoice-premium.css",
+  "./images/logo.png",
+  "./favicon/favicon.svg",
 ];
 
 self.addEventListener("install", (event) => {
@@ -36,7 +41,7 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   // Never cache authentication or API traffic.
-  if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/rest/")) return;
+  if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/rest/") || url.pathname.startsWith("/functions/")) return;
 
   // Navigations: network first, fall back to cache then the offline page.
   if (request.mode === "navigate") {
@@ -51,7 +56,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets: stale-while-revalidate.
+  // Static assets: stale-while-revalidate for HTML, CSS, JS, fonts, images
   event.respondWith((async () => {
     const cached = await caches.match(request);
     const network = fetch(request).then((response) => {

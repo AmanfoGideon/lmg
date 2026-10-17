@@ -12,6 +12,8 @@ import { initUsers } from "./users-view.js";
 import { initBackup } from "./backup-view.js";
 import { initSidebar } from "./sidebar.js";
 import { getSupabase } from "./supabase.js";
+import { initSyncEngine, downloadLatestData } from "./sync-engine.js";
+import { initSyncUI } from "./sync-ui.js";
 
 const titles = {
   dashboard: ["Dashboard", "Overview of business performance"],
@@ -119,6 +121,15 @@ try {
     viewInits.backup = initBackup;
   }
   initSidebar();
+
+  // Initialize offline sync engine and UI
+  initSyncEngine();
+  initSyncUI();
+
+  // Download latest data for offline use
+  downloadLatestData().catch((error) => {
+    console.error("Failed to download latest data for offline use:", error);
+  });
 
   document.getElementById("profileForm").addEventListener("submit", async (event) => {
     event.preventDefault();

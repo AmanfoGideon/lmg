@@ -1,4 +1,23 @@
 import { getSupabase } from "./supabase.js";
+import { getSyncStatus } from "./sync-engine.js";
+import {
+  saveClientOffline,
+  deleteClientOffline,
+  listClientsOffline,
+  saveProductOffline,
+  deleteProductOffline,
+  listProductsOffline,
+  createTransactionOffline,
+  updateTransactionOffline,
+  deleteTransactionOffline,
+  listTransactionsOffline,
+  createInvoiceOffline,
+  updateInvoiceOffline,
+  deleteInvoiceOffline,
+  listInvoicesOffline,
+  addClientInteractionOffline,
+  listClientInteractionsOffline,
+} from "./offline-data.js";
 
 // EDGE FUNCTION DEPENDENCIES:
 // This file includes calls to Supabase Edge Functions for operations that require:
@@ -6,13 +25,25 @@ import { getSupabase } from "./supabase.js";
 // 2. External provider API keys (sms-send: SMS provider; email-send: Resend email)
 // These cannot be replaced with direct client calls due to security requirements.
 // All other operations use direct Supabase client or database RPC functions.
+//
+// OFFLINE SUPPORT:
+// Functions now support offline operation by falling back to IndexedDB when offline.
+// Changes are queued for synchronization when connectivity is restored.
 
 function unwrap(result) {
   if (result.error) throw result.error;
   return result.data;
 }
 
+function isOnline() {
+  return getSyncStatus() !== "offline";
+}
+
 export async function listClients({ query = "", limit = 25, page = 1 } = {}) {
+  if (!isOnline()) {
+    return await listClientsOffline({ query, limit, page });
+  }
+
   const offset = Math.max(0, page - 1) * limit;
   const { data, error } = await getSupabase().rpc("search_clients", {
     p_query: query.trim(),
@@ -27,6 +58,10 @@ export async function listClients({ query = "", limit = 25, page = 1 } = {}) {
 }
 
 export async function saveClient(client, id = null) {
+  if (!isOnline()) {
+    return await saveClientOffline(client, id);
+  }
+
   const request = id
     ? getSupabase().from("clients").update(client).eq("id", id).select().single()
     : getSupabase().from("clients").insert(client).select().single();
@@ -34,10 +69,18 @@ export async function saveClient(client, id = null) {
 }
 
 export async function deleteClient(id) {
+  if (!isOnline()) {
+    return await deleteClientOffline(id);
+  }
+
   return unwrap(await getSupabase().from("clients").delete().eq("id", id));
 }
 
 export async function listClientInteractions(clientId, limit = 3) {
+  if (!isOnline()) {
+    return await listClientInteractionsOffline(clientId, limit);
+  }
+
   return unwrap(await getSupabase()
     .from("client_interactions")
     .select("id, note, created_at")
@@ -47,6 +90,10 @@ export async function listClientInteractions(clientId, limit = 3) {
 }
 
 export async function addClientInteraction(clientId, note) {
+  if (!isOnline()) {
+    return await addClientInteractionOffline(clientId, note);
+  }
+
   return unwrap(await getSupabase()
     .from("client_interactions")
     .insert({ client_id: clientId, note: note.trim() })
@@ -55,6 +102,10 @@ export async function addClientInteraction(clientId, note) {
 }
 
 export async function listProducts() {
+  if (!isOnline()) {
+    return await listProductsOffline();
+  }
+
   return unwrap(await getSupabase()
     .from("products")
     .select("id, name, sku, price, stock, min_stock, created_at")
@@ -62,6 +113,10 @@ export async function listProducts() {
 }
 
 export async function saveProduct(product, id = null) {
+  if (!isOnline()) {
+    return await saveProductOffline(product, id);
+  }
+
   const request = id
     ? getSupabase().from("products").update(product).eq("id", id).select().single()
     : getSupabase().from("products").insert(product).select().single();
@@ -69,6 +124,10 @@ export async function saveProduct(product, id = null) {
 }
 
 export async function deleteProduct(id) {
+  if (!isOnline()) {
+    return await deleteProductOffline(id);
+  }
+
   return unwrap(await getSupabase().from("products").delete().eq("id", id));
 }
 
@@ -81,6 +140,10 @@ export async function updateOwnProfile(id, profile) {
 }
 
 export async function createInvoice(invoice) {
+  if (!isOnline()) {
+    return await createInvoiceOffline(invoice);
+  }
+
   return unwrap(await getSupabase().rpc("create_invoice", {
     p_client_id: invoice.clientId ?? null,
     p_client_name: invoice.clientName ?? null,
@@ -111,6 +174,10 @@ export async function getDashboard(period = "month") {
 }
 
 export async function listTransactions(limit = 100) {
+  if (!isOnline()) {
+    return await listTransactionsOffline(limit);
+  }
+
   return unwrap(await getSupabase()
     .from("transactions")
     .select("id, client_id, type, amount, date, payment_method, description, invoice_id, clients(full_name), invoices(invoice_number)")
@@ -120,6 +187,10 @@ export async function listTransactions(limit = 100) {
 }
 
 export async function createTransaction(transaction) {
+  if (!isOnline()) {
+    return await createTransactionOffline(transaction);
+  }
+
   return unwrap(await getSupabase().rpc("create_transaction", {
     p_client_id: transaction.clientId,
     p_client_name: transaction.clientName || null,
@@ -133,6 +204,10 @@ export async function createTransaction(transaction) {
 }
 
 export async function updateTransaction(transaction) {
+  if (!isOnline()) {
+    return await updateTransactionOffline(transaction, transaction.id);
+  }
+
   return unwrap(await getSupabase().rpc("update_transaction", {
     p_id: transaction.id,
     p_amount: transaction.amount,
@@ -145,6 +220,10 @@ export async function updateTransaction(transaction) {
 }
 
 export async function removeTransaction(id) {
+  if (!isOnline()) {
+    return await deleteTransactionOffline(id);
+  }
+
   return unwrap(await getSupabase().rpc("delete_transaction", { p_id: id }));
 }
 
@@ -153,6 +232,10 @@ export async function listClientsForForms() {
 }
 
 export async function listInvoices() {
+  if (!isOnline()) {
+    return await listInvoicesOffline(100);
+  }
+
   return unwrap(await getSupabase()
     .from("invoices")
     .select("id, invoice_number, client_id, invoice_date, due_date, total, status, clients(full_name)")
