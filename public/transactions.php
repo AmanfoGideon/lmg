@@ -173,11 +173,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $clients = $conn->query("SELECT id, full_name FROM clients ORDER BY full_name ASC");
 $clientsArr = [];
 while ($cRow = $clients->fetch_assoc()) { $clientsArr[] = $cRow; }
+$txLimit = (isset($_GET['format']) && $_GET['format'] === 'json') ? ' LIMIT 100' : '';
 $tx = $conn->query("SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, t.invoice_id, c.full_name AS client, i.invoice_number
                     FROM transactions t
                     LEFT JOIN clients c ON c.id=t.client_id
                     LEFT JOIN invoices i ON i.id=t.invoice_id
-                    ORDER BY t.date DESC, t.id DESC LIMIT 100");
+                    ORDER BY t.date DESC, t.id DESC".$txLimit);
 $userName = htmlspecialchars($_SESSION['full_name']);
 $role = $_SESSION['role'] ?? 'staff';
 $payload = [];
@@ -281,8 +282,13 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       <div class="col-lg-8">
         <div id="listTx" class="card p-3">
           <h6 class="mb-3">Recent Transactions</h6>
+          <div class="d-flex flex-wrap gap-2 mb-3" role="group" aria-label="Filter transactions by type">
+            <button type="button" class="btn btn-sm btn-outline-light active" data-transaction-filter="all" aria-pressed="true">All Transactions</button>
+            <button type="button" class="btn btn-sm btn-outline-light" data-transaction-filter="income" aria-pressed="false">Income</button>
+            <button type="button" class="btn btn-sm btn-outline-light" data-transaction-filter="expense" aria-pressed="false">Expenses</button>
+          </div>
           <div class="table-responsive">
-            <table class="table table-borderless table-sm table-striped table-hover table-brand datatable">
+            <table id="transactionsTable" class="table table-borderless table-sm table-striped table-hover table-brand datatable">
               <thead>
                 <tr class="text-muted small">
                   <th>#</th>
@@ -452,14 +458,51 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     $('table.datatable').each(function(){
       const el = this;
       if ($.fn.DataTable.isDataTable(el)) return;
-        $(el).DataTable({
+        const table = $(el).DataTable({
           destroy: true,
           pageLength: 10,
           lengthMenu: [10,25,50,100],
           order: [],
           stateSave: true,
-          language: { searchPlaceholder: 'Search...' }
+          language: { searchPlaceholder: 'Search...', emptyTable: 'No transactions found.', zeroRecords: 'No transactions found.' }
         });
+
+        const filterButtons = document.querySelectorAll('[data-transaction-filter]');
+        const emptyMessages = {
+          all: 'No transactions found.',
+          income: 'No income transactions found.',
+          expense: 'No expense transactions found.'
+        };
+        function setTransactionFilter(filter) {
+          const isTypedFilter = filter !== 'all';
+          table.column(2).search(isTypedFilter ? '^' + filter + '$' : '', isTypedFilter, false);
+          filterButtons.forEach(function(button) {
+            const active = button.dataset.transactionFilter === filter;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+          });
+          table.settings()[0].oLanguage.sEmptyTable = emptyMessages[filter];
+          table.settings()[0].oLanguage.sZeroRecords = emptyMessages[filter];
+          table.draw();
+        }
+        filterButtons.forEach(function(button) {
+          button.addEventListener('click', function() {
+            setTransactionFilter(button.dataset.transactionFilter);
+          });
+        });
+
+        // Reflect any type filter restored by DataTables' existing saved table state.
+        const savedTypeSearch = table.column(2).search();
+        const savedFilter = savedTypeSearch === '^income$' ? 'income'
+          : savedTypeSearch === '^expense$' ? 'expense'
+            : 'all';
+        filterButtons.forEach(function(button) {
+          const active = button.dataset.transactionFilter === savedFilter;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        table.settings()[0].oLanguage.sEmptyTable = emptyMessages[savedFilter];
+        table.settings()[0].oLanguage.sZeroRecords = emptyMessages[savedFilter];
     });
   });
 </script>
