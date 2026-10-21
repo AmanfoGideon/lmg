@@ -116,43 +116,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $oldResult = $oldStmt->get_result();
         $oldTx = $oldResult->fetch_assoc() ?: null;
         $oldStmt->close();
-        $conn->begin_transaction();
-        $amount = (float)($_POST['amount'] ?? 0);
-        $type = $_POST['type'] ?? 'income';
-        $payment_method = $_POST['payment_method'] ?? null;
-        $description = trim($_POST['description'] ?? '');
-        $date = $_POST['date'] ?: date('Y-m-d');
-        $invoice_id = (int)($_POST['invoice_id'] ?? 0);
-        if (!in_array($type, ['income','expense','invoice','payment'])) { $type = 'income'; }
-        $upd = $conn->prepare("UPDATE transactions SET amount=?, type=?, payment_method=?, description=?, date=?, invoice_id=? WHERE id=? AND NOT (type='payment' AND invoice_id IS NOT NULL) AND NOT (?='payment' AND ?>0)");
-        $upd->bind_param('dssssiisi', $amount, $type, $payment_method, $description, $date, $invoice_id, $txId, $type, $invoice_id);
-        if ($upd->execute() && $upd->affected_rows > 0) {
-          $message = 'Transaction updated';
-          if ($oldTx) {
-            log_action($conn, 'transaction_update', (string)$txId.'|'.$type.'|'.$amount, [
-              'entity_id' => (string)$txId,
-              'old_values' => $oldTx,
-              'new_values' => ['client_id'=>(int)$oldTx['client_id'],'amount'=>$amount,'type'=>$type,'date'=>$date,'payment_method'=>$payment_method,'description'=>$description,'invoice_id'=>$invoice_id ?: null]
-            ]);
+        if ($oldTx && $oldTx['type'] === 'payment' && $oldTx['invoice_id'] !== null) {
+          try {
+            $method = trim((string)($_POST['payment_method'] ?? ''));
+            invoice_update_payment($conn, $txId, (string)($_POST['amount'] ?? ''), $method === '' ? null : $method, trim((string)($_POST['description'] ?? '')), (string)($_POST['date'] ?? ''));
+            $message = 'Invoice payment corrected. The existing receipt and payment record were updated.';
+          } catch (InvalidArgumentException $e) {
+            $message = $e->getMessage();
+          } catch (Throwable $e) {
+            error_log('Invoice payment correction failed: '.$e->getMessage());
+            $message = 'Invoice payment could not be corrected. Please try again.';
           }
-          if ($invoice_id > 0 && $type !== 'payment') {
-            $invoiceStatus = invoice_recalculate_status($conn, $invoice_id);
-            if ($invoiceStatus['status'] !== $invoiceStatus['old_status']) {
-              audit_event($conn, [
-                'action'=>'invoice.status.updated','module'=>'invoices','entity_type'=>'invoice','entity_id'=>(string)$invoice_id,
-                'description'=>'Invoice payment status recalculated after a transaction update.',
-                'old_values'=>['status'=>$invoiceStatus['old_status']],
-                'new_values'=>['status'=>$invoiceStatus['status'],'paid_total'=>invoice_cents_decimal($invoiceStatus['paid_cents'])]
+        } else {
+          $conn->begin_transaction();
+          $amount = (float)($_POST['amount'] ?? 0);
+          $type = $_POST['type'] ?? 'income';
+          $payment_method = $_POST['payment_method'] ?? null;
+          $description = trim($_POST['description'] ?? '');
+          $date = $_POST['date'] ?: date('Y-m-d');
+          $invoice_id = (int)($_POST['invoice_id'] ?? 0);
+          if (!in_array($type, ['income','expense','invoice','payment'])) { $type = 'income'; }
+          $upd = $conn->prepare("UPDATE transactions SET amount=?, type=?, payment_method=?, description=?, date=?, invoice_id=? WHERE id=? AND NOT (type='payment' AND invoice_id IS NOT NULL) AND NOT (?='payment' AND ?>0)");
+          $upd->bind_param('dssssiisi', $amount, $type, $payment_method, $description, $date, $invoice_id, $txId, $type, $invoice_id);
+          if ($upd->execute() && $upd->affected_rows > 0) {
+            $message = 'Transaction updated';
+            if ($oldTx) {
+              log_action($conn, 'transaction_update', (string)$txId.'|'.$type.'|'.$amount, [
+                'entity_id' => (string)$txId,
+                'old_values' => $oldTx,
+                'new_values' => ['client_id'=>(int)$oldTx['client_id'],'amount'=>$amount,'type'=>$type,'date'=>$date,'payment_method'=>$payment_method,'description'=>$description,'invoice_id'=>$invoice_id ?: null]
               ]);
             }
-          }          $conn->commit();
-        } else {
-          $conn->rollback();
-          $message = (($oldTx && $oldTx['type'] === 'payment' && $oldTx['invoice_id'] !== null) || ($type === 'payment' && $invoice_id > 0))
-            ? 'Invoice payments cannot be edited; record a reversal instead.'
-            : 'Error updating transaction';
+            if ($invoice_id > 0 && $type !== 'payment') {
+              $invoiceStatus = invoice_recalculate_status($conn, $invoice_id);
+              if ($invoiceStatus['status'] !== $invoiceStatus['old_status']) {
+                audit_event($conn, [
+                  'action'=>'invoice.status.updated','module'=>'invoices','entity_type'=>'invoice','entity_id'=>(string)$invoice_id,
+                  'description'=>'Invoice payment status recalculated after a transaction update.',
+                  'old_values'=>['status'=>$invoiceStatus['old_status']],
+                  'new_values'=>['status'=>$invoiceStatus['status'],'paid_total'=>invoice_cents_decimal($invoiceStatus['paid_cents'])]
+                ]);
+              }
+            }
+            $conn->commit();
+          } else {
+            $conn->rollback();
+            $message = ($type === 'payment' && $invoice_id > 0)
+              ? 'Invoice payments must be edited from their existing payment record.'
+              : 'Error updating transaction';
+          }
+          $upd->close();
         }
-        $upd->close();
       }
   }
   }
@@ -254,7 +268,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
               <input class="form-control" list="invoicesDatalist" name="invoice_number" id="invoiceNumberTx" placeholder="Type invoice number to link">
               <datalist id="invoicesDatalist">
                 <?php
-                  $invRes = $conn->query("SELECT id, invoice_number, client_id, total, status FROM invoices ORDER BY id DESC LIMIT 200");
+                  $invRes = $conn->query("SELECT id, invoice_number, client_id, total, status FROM invoices WHERE cancelled_at IS NULL ORDER BY id DESC LIMIT 200");
                   while($iv = $invRes->fetch_assoc()):
                 ?>
                   <option value="<?= htmlspecialchars($iv['invoice_number']) ?>"></option>
@@ -425,7 +439,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     const invIdInput = document.getElementById('invoiceIdTx');
     const invMap = new Map(<?php
       $invMapArr = [];
-      $invRes2 = $conn->query("SELECT id, invoice_number FROM invoices ORDER BY id DESC LIMIT 500");
+      $invRes2 = $conn->query("SELECT id, invoice_number FROM invoices WHERE cancelled_at IS NULL ORDER BY id DESC LIMIT 500");
       while($iv2 = $invRes2->fetch_assoc()) { $invMapArr[] = [$iv2['invoice_number'], (int)$iv2['id']]; }
       echo json_encode($invMapArr, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
     ?>);
@@ -527,8 +541,11 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       fClient.value = dataset.client || '';
       fAmount.value = dataset.amount || '';
       fType.value = dataset.type || 'income';
+      const linkedInvoicePayment = fType.value === 'payment' && Boolean(dataset.invoiceId && dataset.invoiceId !== '0');
+      fType.disabled = linkedInvoicePayment;
       fInvoiceNumber.value = dataset.invoiceNumber || '';
       fInvoiceId.value = dataset.invoiceId || '';
+      fInvoiceNumber.disabled = linkedInvoicePayment;
       fMethod.value = dataset.method || '';
       fDate.value = dataset.date || '';
       fDesc.value = dataset.desc || '';
@@ -538,10 +555,27 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
 
     // toggle invoice row when type changes inside modal
     fType.addEventListener('change', function(){
+      fType.disabled = false;
+      fInvoiceNumber.disabled = false;
       invoiceRow.style.display = (this.value === 'payment') ? '' : 'none';
     });
   })();
 </script>
+<?php if (isset($_GET['edit_transaction']) && filter_var($_GET['edit_transaction'], FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]])): ?>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    if (!window.jQuery || !jQuery.fn.DataTable || !jQuery.fn.DataTable.isDataTable('#transactionsTable')) return;
+    const wantedId = <?= (int)$_GET['edit_transaction'] ?>;
+    const table = jQuery('#transactionsTable').DataTable();
+    table.search('').columns().search('').draw();
+    const row = table.rows().nodes().toArray().find(function(node) {
+      const button = node.querySelector('.btn-edit');
+      return button && Number(button.dataset.id) === wantedId;
+    });
+    row?.querySelector('.btn-edit')?.click();
+  });
+</script>
+<?php endif; ?>
 <script src="js/ui.js"></script>
 </body>
 </html>

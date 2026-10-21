@@ -121,24 +121,35 @@ function invoice_insert(mysqli $conn, array $invoice, array $calculation): int {
   return $id;
 }
 
-/** Update an unpaid invoice and its items atomically, preserving its public invoice number. */
-function invoice_update_unpaid(mysqli $conn, int $invoiceId, array $invoice, array $calculation): void {
+/** Update an invoice and its items atomically while preserving its payment ledger. */
+function invoice_update(mysqli $conn, int $invoiceId, array $invoice, array $calculation, bool $confirmTotalChange = false): array {
   $conn->query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
   $conn->begin_transaction();
   try {
-    $find = $conn->prepare('SELECT invoice_number, client_id, invoice_date, due_date, subtotal, tax, total, notes FROM invoices WHERE id=? FOR UPDATE');
+    $find = $conn->prepare('SELECT invoice_number, client_id, invoice_date, due_date, subtotal, tax, total, notes, status, cancelled_at FROM invoices WHERE id=? FOR UPDATE');
     $find->bind_param('i', $invoiceId);
     $find->execute();
     $existing = $find->get_result()->fetch_assoc();
     $find->close();
     if (!$existing) throw new InvalidArgumentException('Invoice not found.');
+    if ($existing['cancelled_at'] !== null) throw new InvalidArgumentException('Cancelled invoices are read-only.');
 
-    $payment = $conn->prepare("SELECT id FROM transactions WHERE invoice_id=? AND type='payment' LIMIT 1");
+    $payment = $conn->prepare("SELECT COALESCE(SUM(amount),0) AS paid FROM transactions WHERE invoice_id=? AND type='payment'");
     $payment->bind_param('i', $invoiceId);
     $payment->execute();
-    $hasPayment = (bool)$payment->get_result()->fetch_row();
+    $paidValue = (string)$payment->get_result()->fetch_assoc()['paid'];
     $payment->close();
-    if ($hasPayment) throw new InvalidArgumentException('Invoices with recorded payments cannot be edited.');
+    $paidCents = invoice_money_cents($paidValue);
+    if ($paidCents === null) throw new RuntimeException('Recorded payment total is outside the supported range.');
+    $newTotalCents = (int)$calculation['total_cents'];
+    if ($newTotalCents < $paidCents) {
+      throw new InvalidArgumentException('The new invoice total is below the amount already paid. Resolve the excess payment before saving.');
+    }
+    $oldTotalCents = invoice_money_cents((string)$existing['total']);
+    if ($oldTotalCents === null) throw new RuntimeException('Invoice total is invalid.');
+    if ($newTotalCents !== $oldTotalCents && !$confirmTotalChange) {
+      throw new InvalidArgumentException('The invoice total changed. Review and confirm the amount change before saving.');
+    }
 
     $oldItemsStmt = $conn->prepare('SELECT item_name, quantity FROM invoice_items WHERE invoice_id=? ORDER BY id');
     $oldItemsStmt->bind_param('i', $invoiceId);
@@ -187,6 +198,15 @@ function invoice_update_unpaid(mysqli $conn, int $invoiceId, array $invoice, arr
     $update->execute();
     $update->close();
 
+    // A payment receipt joins the current client record. Keep linked payment
+    // transactions aligned if the invoice client is changed.
+    if ($clientId !== (int)$existing['client_id']) {
+      $paymentsClient = $conn->prepare("UPDATE transactions SET client_id=? WHERE invoice_id=? AND type='payment'");
+      $paymentsClient->bind_param('ii', $clientId, $invoiceId);
+      $paymentsClient->execute();
+      $paymentsClient->close();
+    }
+
     $removeItems = $conn->prepare('DELETE FROM invoice_items WHERE invoice_id=?');
     $removeItems->bind_param('i', $invoiceId);
     $removeItems->execute();
@@ -202,12 +222,86 @@ function invoice_update_unpaid(mysqli $conn, int $invoiceId, array $invoice, arr
     }
     $insertItem->close();
 
+    $status = invoice_recalculate_status($conn, $invoiceId);
+
     log_action($conn, 'invoice_update', (string)$existing['invoice_number'], [
       'entity_id'=>(string)$invoiceId,
-      'old_values'=>['client_id'=>(int)$existing['client_id'],'invoice_date'=>$existing['invoice_date'],'due_date'=>$existing['due_date'],'subtotal'=>(string)$existing['subtotal'],'tax'=>(string)$existing['tax'],'total'=>(string)$existing['total'],'notes'=>$existing['notes']],
-      'new_values'=>['client_id'=>$clientId,'invoice_date'=>$invoiceDate,'due_date'=>$dueDate,'subtotal'=>$calculation['subtotal'],'tax'=>$calculation['tax'],'total'=>$calculation['total'],'item_count'=>count($calculation['items'])]
+      'old_values'=>['client_id'=>(int)$existing['client_id'],'invoice_date'=>$existing['invoice_date'],'due_date'=>$existing['due_date'],'subtotal'=>(string)$existing['subtotal'],'tax'=>(string)$existing['tax'],'total'=>(string)$existing['total'],'paid_total'=>invoice_cents_decimal($paidCents),'balance'=>invoice_cents_decimal(max(0,$oldTotalCents-$paidCents)),'status'=>(string)$existing['status'],'notes'=>$existing['notes']],
+      'new_values'=>['client_id'=>$clientId,'invoice_date'=>$invoiceDate,'due_date'=>$dueDate,'subtotal'=>$calculation['subtotal'],'tax'=>$calculation['tax'],'total'=>$calculation['total'],'paid_total'=>invoice_cents_decimal($status['paid_cents']),'balance'=>invoice_cents_decimal($status['balance_cents']),'status'=>$status['status'],'item_count'=>count($calculation['items'])]
     ]);
     $conn->commit();
+    return ['old_total_cents'=>$oldTotalCents,'total_cents'=>$newTotalCents,'paid_cents'=>$status['paid_cents'],'balance_cents'=>$status['balance_cents'],'status'=>$status['status']];
+  } catch (Throwable $e) {
+    try { $conn->rollback(); } catch (Throwable $ignored) {}
+    throw $e;
+  }
+}
+
+/** Correct an existing invoice payment in place without creating a new receipt. */
+function invoice_update_payment(mysqli $conn, int $transactionId, string $amountValue, ?string $method, string $description, string $date): array {
+  $amountCents = invoice_money_cents($amountValue);
+  if ($amountCents === null || $amountCents <= 0 || $amountCents > INVOICE_MAX_CENTS) throw new InvalidArgumentException('Payment amount must be positive and valid.');
+  if (!in_array($method, [null, 'cash', 'mobile', 'card'], true)) throw new InvalidArgumentException('Select a valid payment method.');
+  if (!invoice_valid_date($date)) throw new InvalidArgumentException('Payment date is invalid.');
+
+  $conn->query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+  $conn->begin_transaction();
+  try {
+    $link = $conn->prepare("SELECT invoice_id FROM transactions WHERE id=? AND type='payment' AND invoice_id IS NOT NULL");
+    $link->bind_param('i', $transactionId);
+    $link->execute();
+    $linked = $link->get_result()->fetch_assoc();
+    $link->close();
+    if (!$linked) throw new InvalidArgumentException('Linked invoice payment not found.');
+    $invoiceId = (int)$linked['invoice_id'];
+
+    $invoice = $conn->prepare('SELECT total, status FROM invoices WHERE id=? FOR UPDATE');
+    $invoice->bind_param('i', $invoiceId);
+    $invoice->execute();
+    $invoiceRow = $invoice->get_result()->fetch_assoc();
+    $invoice->close();
+    if (!$invoiceRow) throw new InvalidArgumentException('Invoice not found.');
+
+    $payment = $conn->prepare("SELECT id, client_id, amount, date, payment_method, description FROM transactions WHERE id=? AND invoice_id=? AND type='payment' FOR UPDATE");
+    $payment->bind_param('ii', $transactionId, $invoiceId);
+    $payment->execute();
+    $oldPayment = $payment->get_result()->fetch_assoc();
+    $payment->close();
+    if (!$oldPayment) throw new InvalidArgumentException('Linked invoice payment not found.');
+
+    $totalCents = invoice_money_cents((string)$invoiceRow['total']);
+    $oldAmountCents = invoice_money_cents((string)$oldPayment['amount']);
+    if ($totalCents === null || $oldAmountCents === null) throw new RuntimeException('Invoice or payment amount is invalid.');
+    $sum = $conn->prepare("SELECT COALESCE(SUM(amount),0) AS paid FROM transactions WHERE invoice_id=? AND type='payment' AND id<>?");
+    $sum->bind_param('ii', $invoiceId, $transactionId);
+    $sum->execute();
+    $paidCents = invoice_money_cents((string)$sum->get_result()->fetch_assoc()['paid']);
+    $sum->close();
+    if ($paidCents === null || $paidCents > $totalCents - $amountCents) {
+      throw new InvalidArgumentException('This correction would make total invoice payments exceed the invoice total.');
+    }
+
+    $amount = invoice_cents_decimal($amountCents);
+    $update = $conn->prepare("UPDATE transactions SET amount=?, date=?, payment_method=?, description=? WHERE id=? AND invoice_id=? AND type='payment'");
+    $update->bind_param('ssssii', $amount, $date, $method, $description, $transactionId, $invoiceId);
+    $update->execute();
+    $update->close();
+    $status = invoice_recalculate_status($conn, $invoiceId);
+    log_action($conn, 'transaction_update', (string)$transactionId.'|payment|'.$amount, [
+      'entity_id'=>(string)$transactionId,
+      'old_values'=>['client_id'=>(int)$oldPayment['client_id'],'invoice_id'=>$invoiceId,'amount'=>(string)$oldPayment['amount'],'type'=>'payment','date'=>$oldPayment['date'],'payment_method'=>$oldPayment['payment_method'],'description'=>$oldPayment['description']],
+      'new_values'=>['client_id'=>(int)$oldPayment['client_id'],'invoice_id'=>$invoiceId,'amount'=>$amount,'type'=>'payment','date'=>$date,'payment_method'=>$method,'description'=>$description,'invoice_status'=>$status['status'],'paid_total'=>invoice_cents_decimal($status['paid_cents']),'balance'=>invoice_cents_decimal($status['balance_cents'])]
+    ]);
+    if ($status['old_status'] !== $status['status']) {
+      audit_event($conn, [
+        'action'=>'invoice.status.updated','module'=>'invoices','entity_type'=>'invoice','entity_id'=>(string)$invoiceId,
+        'description'=>'Invoice payment status recalculated after a payment correction.',
+        'old_values'=>['status'=>$status['old_status']],
+        'new_values'=>['status'=>$status['status'],'paid_total'=>invoice_cents_decimal($status['paid_cents']),'balance'=>invoice_cents_decimal($status['balance_cents'])]
+      ]);
+    }
+    $conn->commit();
+    return ['old_amount_cents'=>$oldAmountCents,'amount_cents'=>$amountCents,'paid_cents'=>$status['paid_cents'],'balance_cents'=>$status['balance_cents'],'status'=>$status['status']];
   } catch (Throwable $e) {
     try { $conn->rollback(); } catch (Throwable $ignored) {}
     throw $e;
@@ -259,12 +353,13 @@ function invoice_record_payment(mysqli $conn, int $invoiceId, string $amountValu
       return ['transaction_id'=>(int)$existingRow['id'], 'duplicate'=>true, 'old_status'=>null, 'status'=>null, 'paid_cents'=>null, 'balance_cents'=>null];
     }
 
-    $invoice = $conn->prepare('SELECT client_id, total, status FROM invoices WHERE id=? FOR UPDATE');
+    $invoice = $conn->prepare('SELECT client_id, total, status, cancelled_at FROM invoices WHERE id=? FOR UPDATE');
     $invoice->bind_param('i', $invoiceId);
     $invoice->execute();
     $row = $invoice->get_result()->fetch_assoc();
     $invoice->close();
     if (!$row || $row['client_id'] === null) throw new InvalidArgumentException('Invoice not found or has no client.');
+    if ($row['cancelled_at'] !== null) throw new InvalidArgumentException('Payments cannot be added to a cancelled invoice.');
     $retry = $conn->prepare("SELECT id, invoice_id, amount, type FROM transactions WHERE request_key=? LIMIT 1");
     $retry->bind_param('s', $requestKey);
     $retry->execute();

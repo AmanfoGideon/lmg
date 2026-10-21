@@ -20,12 +20,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       throw new InvalidArgumentException('Select a valid client and invoice dates.');
     }
     $calculation = invoice_calculate(is_array($_POST['items'] ?? null) ? $_POST['items'] : [], $_POST['tax'] ?? '0');
-    invoice_update_unpaid($conn, (int)$invoiceId, [
+    invoice_update($conn, (int)$invoiceId, [
       'client_id'=>$clientId,
       'invoice_date'=>$invoiceDate,
       'due_date'=>$dueDate,
       'notes'=>trim((string)($_POST['notes'] ?? '')),
-    ], $calculation);
+    ], $calculation, ($_POST['confirm_total_change'] ?? '') === '1');
     header('Location: invoice_view.php?id='.(int)$invoiceId.'&updated=1');
     exit;
   } catch (InvalidArgumentException $e) {
@@ -36,7 +36,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   }
 }
 
-$find = $conn->prepare('SELECT id, invoice_number, client_id, invoice_date, due_date, tax, notes FROM invoices WHERE id=?');
+$find = $conn->prepare('SELECT id, invoice_number, client_id, invoice_date, due_date, tax, total, notes, cancelled_at FROM invoices WHERE id=?');
 $find->bind_param('i', $invoiceId);
 $find->execute();
 $invoice = $find->get_result()->fetch_assoc();
@@ -45,12 +45,7 @@ if (!$invoice) {
   http_response_code(404);
   exit('Invoice not found.');
 }
-$payment = $conn->prepare("SELECT id FROM transactions WHERE invoice_id=? AND type='payment' LIMIT 1");
-$payment->bind_param('i', $invoiceId);
-$payment->execute();
-$hasPayments = (bool)$payment->get_result()->fetch_row();
-$payment->close();
-$editBlocked = $hasPayments;
+$editBlocked = $invoice['cancelled_at'] !== null;
 $clients = $conn->query('SELECT id, full_name FROM clients ORDER BY full_name');
 $itemsStmt = $conn->prepare('SELECT item_name, quantity, price FROM invoice_items WHERE invoice_id=? ORDER BY id');
 $itemsStmt->bind_param('i', $invoiceId);
@@ -77,12 +72,13 @@ $userName = htmlspecialchars($_SESSION['full_name'] ?? '', ENT_QUOTES, 'UTF-8');
     <?php $page_title='Edit Invoice'; $page_subtitle=$invoice['invoice_number']; $header_actions=''; include "../includes/layout/header.php"; ?>
     <?php if ($message): ?><div class="alert alert-danger" role="alert"><?= htmlspecialchars($message, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
     <?php if ($editBlocked): ?>
-      <div class="alert alert-warning" role="alert">This invoice has recorded payments and cannot be edited. Its payment history and balance are preserved.</div>
+      <div class="alert alert-warning" role="alert">This invoice was cancelled and is read-only to preserve its financial history.</div>
       <a class="btn btn-outline-light" href="invoice_view.php?id=<?= (int)$invoiceId ?>">View invoice</a>
     <?php else: ?>
-    <form method="POST" class="card p-3" id="editInvoiceForm">
+    <form method="POST" class="card p-3" id="editInvoiceForm" data-original-total-cents="<?= (int)(invoice_money_cents((string)$invoice['total']) ?? 0) ?>">
       <?= csrf_input() ?>
       <input type="hidden" name="invoice_id" value="<?= (int)$invoiceId ?>">
+      <input type="hidden" name="confirm_total_change" id="confirmTotalChange" value="0">
       <div class="row g-3">
         <div class="col-md-6"><label class="form-label" for="client_id">Client</label><select class="form-select" id="client_id" name="client_id" required><?php while($client=$clients->fetch_assoc()): ?><option value="<?= (int)$client['id'] ?>" <?= (int)$client['id']===(int)$invoice['client_id']?'selected':'' ?>><?= htmlspecialchars($client['full_name'], ENT_QUOTES, 'UTF-8') ?></option><?php endwhile; ?></select></div>
         <div class="col-md-3"><label class="form-label" for="invoice_date">Invoice date</label><input class="form-control" id="invoice_date" name="invoice_date" type="date" value="<?= htmlspecialchars($invoice['invoice_date'], ENT_QUOTES, 'UTF-8') ?>" required></div>
@@ -101,6 +97,7 @@ $userName = htmlspecialchars($_SESSION['full_name'] ?? '', ENT_QUOTES, 'UTF-8');
 <script>
 (() => {
   const rows = document.getElementById('editInvoiceItems');
+  if (!rows) return;
   let nextIndex = rows.children.length;
   function bindRemove(button) { button.addEventListener('click', () => { if (rows.children.length > 1) button.closest('tr').remove(); }); }
   rows.querySelectorAll('.remove-item').forEach(bindRemove);
@@ -113,6 +110,21 @@ $userName = htmlspecialchars($_SESSION['full_name'] ?? '', ENT_QUOTES, 'UTF-8');
   });
   document.getElementById('editInvoiceForm').addEventListener('submit', (event) => {
     if (!rows.children.length) { event.preventDefault(); alert('Add at least one invoice item.'); return; }
+    const form = event.currentTarget;
+    const toCents = value => Math.round(Number(value || 0) * 100);
+    const subtotalCents = [...rows.querySelectorAll('tr')].reduce((sum, row) => {
+      return sum + Number(row.querySelector('[name$="[qty]"]').value || 0) * toCents(row.querySelector('[name$="[price]"]').value);
+    }, 0);
+    const nextTotalCents = subtotalCents + toCents(form.querySelector('[name="tax"]').value);
+    const originalTotalCents = Number(form.dataset.originalTotalCents || 0);
+    const confirmation = document.getElementById('confirmTotalChange');
+    if (nextTotalCents !== originalTotalCents) {
+      if (!window.confirm('This edit changes the invoice total. Review the revised amount owed and payment balance before continuing.')) {
+        event.preventDefault();
+        return;
+      }
+      confirmation.value = '1';
+    }
     const button = event.currentTarget.querySelector('[type="submit"]');
     button.disabled = true;
     button.textContent = 'Saving...';

@@ -9,6 +9,10 @@ $id = (int)($_GET['id'] ?? 0);
 $message = isset($_GET['updated']) ? 'Invoice updated.' : '';
 $requestKey = bin2hex(random_bytes(16));
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+  if (!csrf_verify()) {
+    http_response_code(400);
+    $message = 'Invalid request token.';
+  } else {
   $action = $_POST['action'] ?? '';
   if ($action === 'add_payment') $requestKey = (string)($_POST['request_key'] ?? '');
   if ($action === 'add_payment') {
@@ -66,15 +70,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       log_action($conn, 'email_send', (string)$id.'|'.$toEmail);
     }
   }
+  }
 }
 $stmt = $conn->prepare("SELECT i.invoice_number, i.invoice_date, i.due_date, i.subtotal, i.tax, i.total,
   CASE WHEN COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.invoice_id=i.id AND t.type='payment'),0)<=0 THEN 'unpaid'
        WHEN COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.invoice_id=i.id AND t.type='payment'),0)<COALESCE(i.total,0) THEN 'partial'
        ELSE 'paid' END AS status,
-  i.notes, i.client_id, c.full_name, c.email, c.phone, c.address FROM invoices i LEFT JOIN clients c ON c.id=i.client_id WHERE i.id=?");
+  i.notes, i.client_id, c.full_name, c.email, c.phone, c.address, i.cancelled_at, i.cancellation_reason FROM invoices i LEFT JOIN clients c ON c.id=i.client_id WHERE i.id=?");
 $stmt->bind_param('i', $id);
 $stmt->execute();
-$stmt->bind_result($invoice_number,$invoice_date,$due_date,$subtotal,$tax,$total,$status,$notes,$client_id,$client_name,$client_email,$client_phone,$client_address);
+$cancelledAt = null;
+$cancellationReason = null;
+$stmt->bind_result($invoice_number,$invoice_date,$due_date,$subtotal,$tax,$total,$status,$notes,$client_id,$client_name,$client_email,$client_phone,$client_address,$cancelledAt,$cancellationReason);
 $found = $stmt->fetch();
 $stmt->close();
 
@@ -138,10 +145,14 @@ $role = $_SESSION['role'] ?? 'staff';
   <?php $active_page='invoices'; include "../includes/layout/sidebar.php"; ?>
 
   <main class="main flex-grow-1 p-4">
-    <?php $page_title='Invoice '.($invoice_number ?? ''); $page_subtitle='Preview and print'; $header_actions='<button class="btn btn-outline-light me-2" onclick="window.print()"><i class="bi bi-printer"></i> Print</button>'; include "../includes/layout/header.php"; ?>
+    <?php $page_title='Invoice '.($invoice_number ?? ''); $page_subtitle='Preview and print'; $header_actions=($found && $cancelledAt === null ? '<a class="btn btn-outline-light me-2" href="invoice_edit.php?id='.(int)$id.'">Edit invoice</a>' : '').'<button class="btn btn-outline-light me-2" onclick="window.print()"><i class="bi bi-printer"></i> Print</button>'; include "../includes/layout/header.php"; ?>
 
     <?php if ($message): ?>
       <div class="alert alert-info py-2"><?= htmlspecialchars($message) ?></div>
+    <?php endif; ?>
+
+    <?php if ($found && $cancelledAt !== null): ?>
+      <div class="alert alert-warning" role="status"><strong>Cancelled invoice.</strong> Payment and receipt history remain available. Reason: <?= htmlspecialchars($cancellationReason ?? '') ?></div>
     <?php endif; ?>
 
     <?php if(!$found): ?>
@@ -161,7 +172,7 @@ $role = $_SESSION['role'] ?? 'staff';
           <div class="text-muted small">Invoice #: <?= htmlspecialchars($invoice_number) ?></div>
           <div class="text-muted small">Date: <?= htmlspecialchars($invoice_date ?? '') ?></div>
           <div class="text-muted small">Due: <?= htmlspecialchars($due_date ?? '') ?></div>
-          <div class="mt-1">Status: <span class="badge bg-<?= $status==='paid'?'success':($status==='partial'?'warning text-dark':'secondary') ?>"><?= htmlspecialchars($status) ?></span></div>
+          <div class="mt-1">Payment status: <span class="badge bg-<?= $status==='paid'?'success':($status==='partial'?'warning text-dark':'secondary') ?>"><?= htmlspecialchars($status) ?></span></div>
         </div>
       </div>
 
@@ -210,7 +221,8 @@ $role = $_SESSION['role'] ?? 'staff';
       </div>
 
       <?php if($notes): ?><div class="mt-3 text-muted small"><?= nl2br(htmlspecialchars($notes)) ?></div><?php endif; ?>
-      <?php if ($status !== 'paid'): ?>
+      <?php if ($cancelledAt === null): ?>
+      <?php if ($status !== 'paid' && $cancelledAt === null): ?>
       <div class="mt-4">
         <div class="card p-3">
           <h6 class="mb-3">Record Payment</h6>
@@ -261,6 +273,7 @@ $role = $_SESSION['role'] ?? 'staff';
           </form>
         </div>
       </div>
+      <?php endif; ?>
     </div>
     <section class="card p-3 mt-3 no-print" aria-labelledby="paymentHistoryTitle">
       <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
@@ -272,7 +285,7 @@ $role = $_SESSION['role'] ?? 'staff';
       <?php else: ?>
         <div class="table-responsive">
           <table class="table table-borderless table-sm table-striped table-brand mb-0">
-            <thead><tr class="text-muted small"><th>Payment #</th><th>Date</th><th>Method</th><th>Description</th><th class="text-end">Amount</th></tr></thead>
+            <thead><tr class="text-muted small"><th>Payment #</th><th>Date</th><th>Method</th><th>Description</th><th class="text-end">Amount</th><th>Actions</th></tr></thead>
             <tbody>
               <?php foreach ($paymentHistory as $paymentRow): ?>
                 <tr>
@@ -281,6 +294,7 @@ $role = $_SESSION['role'] ?? 'staff';
                   <td><?= htmlspecialchars($paymentRow['payment_method'] ?: '—') ?></td>
                   <td><?= htmlspecialchars($paymentRow['description'] ?: '—') ?></td>
                   <td class="text-end"><?= fmtCurrency((float)$paymentRow['amount']) ?></td>
+                  <td><a class="btn btn-sm btn-outline-light" href="transactions.php?edit_transaction=<?= (int)$paymentRow['id'] ?>">Edit payment</a></td>
                 </tr>
               <?php endforeach; ?>
             </tbody>

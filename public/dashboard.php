@@ -34,9 +34,9 @@ $monthExpense = (float)($rowMonth['expense_total'] ?? 0.0);
 $profit = $monthIncome - $monthExpense;
 $pendingInvoices = 0;
 if ($conn->query("SHOW COLUMNS FROM invoices LIKE 'status'")->num_rows > 0) {
-  $pendingInvoices = (int)$conn->query("SELECT COUNT(*) AS c FROM invoices WHERE status <> 'paid'")->fetch_assoc()['c'];
+  $pendingInvoices = (int)$conn->query("SELECT COUNT(*) AS c FROM invoices WHERE status <> 'paid' AND cancelled_at IS NULL")->fetch_assoc()['c'];
 } else {
-  $pendingInvoices = (int)$conn->query("SELECT COUNT(*) AS c FROM invoices WHERE DATE_FORMAT(invoice_date,'%Y-%m') = DATE_FORMAT(CURDATE(),'%Y-%m')")->fetch_assoc()['c'];
+  $pendingInvoices = (int)$conn->query("SELECT COUNT(*) AS c FROM invoices WHERE cancelled_at IS NULL AND DATE_FORMAT(invoice_date,'%Y-%m') = DATE_FORMAT(CURDATE(),'%Y-%m')")->fetch_assoc()['c'];
 }
 $recent = [];
 $stmtRecent = $conn->prepare("SELECT t.type, t.amount, t.date, c.full_name AS client
@@ -241,7 +241,7 @@ if ($hasSMS) {
 }
 $hasInv = $conn->query("SHOW TABLES LIKE 'invoices'")->num_rows > 0;
 if ($hasInv) {
-  $sqlInv = "SELECT i.invoice_number, i.status, i.invoice_date, c.full_name AS client FROM invoices i LEFT JOIN clients c ON c.id=i.client_id ORDER BY i.invoice_date DESC, i.id DESC LIMIT 12";
+  $sqlInv = "SELECT i.invoice_number, i.status, i.invoice_date, c.full_name AS client FROM invoices i LEFT JOIN clients c ON c.id=i.client_id WHERE i.cancelled_at IS NULL ORDER BY i.invoice_date DESC, i.id DESC LIMIT 12";
   $resInv = $conn->query($sqlInv);
   if ($resInv) {
     while ($i = $resInv->fetch_assoc()) {

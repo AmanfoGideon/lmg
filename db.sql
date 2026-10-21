@@ -98,6 +98,10 @@ CREATE INDEX idx_invoice_client ON invoices(client_id);
 
 -- Track invoice payment status for pending counts
 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS status ENUM('unpaid','partial','paid') DEFAULT 'unpaid';
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cancelled_at DATETIME NULL;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cancelled_by INT NULL;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cancellation_reason VARCHAR(500) NULL;
+CREATE INDEX IF NOT EXISTS idx_invoices_cancelled_at ON invoices(cancelled_at);
 
 -- =======================================
 -- 5) INVOICE ITEMS TABLE
