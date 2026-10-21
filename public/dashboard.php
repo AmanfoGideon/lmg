@@ -1,6 +1,7 @@
 <?php
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
+require_once "../includes/suppliers.php";
 $period = isset($_GET['period']) ? strtolower(trim($_GET['period'])) : 'month';
 if (!in_array($period, ['week','month','year'], true)) { $period = 'month'; }
 if ($period === 'week') {
@@ -161,6 +162,13 @@ if ($hasProducts) {
   while($p = $resLP->fetch_assoc()) { $lowProducts[] = $p; }
 }
 
+// Supplier statistics
+$hasSuppliers = $conn->query("SHOW TABLES LIKE 'suppliers'")->num_rows > 0;
+$supplierStats = [];
+if ($hasSuppliers) {
+  $supplierStats = supplier_get_stats($conn);
+}
+
 $serverData = [
   'user' => [
     'full_name' => $_SESSION['full_name'],
@@ -184,7 +192,8 @@ $serverData = [
   'topClients' => $topClients,
   'inventory' => [
     'low_stock' => $lowStockCount
-  ]
+  ],
+  'suppliers' => $supplierStats
 ];
 $activities = [];
 $hasLogs = $conn->query("SHOW TABLES LIKE 'user_logs'")->num_rows > 0;
@@ -351,6 +360,40 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       </div>
     </div>
 
+    <?php if ($hasSuppliers): ?>
+    <!-- Supplier Overview -->
+    <div class="row g-3 mt-2">
+      <div class="col-lg-3 col-sm-6">
+        <div class="stat-card p-3">
+          <div class="stat-title">Active Suppliers</div>
+          <div class="stat-value"><?= (int)($supplierStats['active_suppliers'] ?? 0) ?></div>
+          <div class="stat-sub">Total: <?= (int)($supplierStats['total_suppliers'] ?? 0) ?></div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-sm-6">
+        <div class="stat-card p-3">
+          <div class="stat-title">Supplier Purchases</div>
+          <div class="stat-value"><?= fmtCurrency($supplierStats['total_purchases'] ?? 0) ?></div>
+          <div class="stat-sub">Total bills</div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-sm-6">
+        <div class="stat-card p-3">
+          <div class="stat-title">Supplier Payments</div>
+          <div class="stat-value"><?= fmtCurrency($supplierStats['total_payments'] ?? 0) ?></div>
+          <div class="stat-sub">Total paid</div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-sm-6">
+        <div class="stat-card p-3">
+          <div class="stat-title">Outstanding Payables</div>
+          <div class="stat-value text-<?= ($supplierStats['total_outstanding'] ?? 0) > 0 ? 'danger' : 'success' ?>"><?= fmtCurrency($supplierStats['total_outstanding'] ?? 0) ?></div>
+          <div class="stat-sub">Overdue: <?= fmtCurrency($supplierStats['total_overdue'] ?? 0) ?></div>
+        </div>
+      </div>
+    </div>
+    <?php endif; ?>
+
     <!-- Weekly Overview -->
     <div class="row g-3 mt-2">
       <div class="col-lg-4 col-sm-6">
@@ -428,6 +471,25 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
             <!-- JS Loads Data -->
           </ul>
         </div>
+        <?php if ($hasSuppliers && !empty($supplierStats['recent_bills'])): ?>
+        <div class="card p-3 mb-3">
+          <h6 class="mb-3">Recent Supplier Bills</h6>
+          <ul class="list-unstyled mb-0 small">
+            <?php foreach($supplierStats['recent_bills'] as $bill): ?>
+              <li class="mb-2">
+                <div class="d-flex justify-content-between">
+                  <span><?= htmlspecialchars($bill['business_name']) ?></span>
+                  <span class="fw-bold"><?= fmtCurrency((float)$bill['total']) ?></span>
+                </div>
+                <div class="text-muted small">
+                  <?= htmlspecialchars($bill['bill_number']) ?> • <?= htmlspecialchars($bill['bill_date']) ?>
+                  <span class="badge bg-<?= $bill['status'] === 'paid' ? 'success' : ($bill['status'] === 'partial' ? 'warning text-dark' : ($bill['status'] === 'overdue' ? 'danger' : 'secondary')) ?> ms-1"><?= htmlspecialchars($bill['status']) ?></span>
+                </div>
+              </li>
+            <?php endforeach; ?>
+          </ul>
+        </div>
+        <?php endif; ?>
 
         <div class="card p-3">
           <h6 class="mb-2">Weekly Trend</h6>

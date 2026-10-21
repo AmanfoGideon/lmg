@@ -992,3 +992,61 @@ function supplier_payment_get_allocations(mysqli $conn, int $payment_id): array 
 
   return $result;
 }
+
+// Get overall supplier statistics for dashboard
+function supplier_get_stats(mysqli $conn): array {
+  $stats = [
+    'total_suppliers' => 0,
+    'active_suppliers' => 0,
+    'total_purchases' => 0,
+    'total_payments' => 0,
+    'total_outstanding' => 0,
+    'total_overdue' => 0,
+    'recent_bills' => [],
+    'recent_payments' => []
+  ];
+
+  // Total and active suppliers
+  $res = $conn->query("SELECT COUNT(*) as total, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as active FROM suppliers");
+  if ($row = $res->fetch_assoc()) {
+    $stats['total_suppliers'] = (int)$row['total'];
+    $stats['active_suppliers'] = (int)$row['active'];
+  }
+
+  // Total purchases and payments
+  $res = $conn->query("SELECT COALESCE(SUM(total), 0) as purchases FROM supplier_bills WHERE status!='cancelled'");
+  if ($row = $res->fetch_assoc()) {
+    $stats['total_purchases'] = (float)$row['purchases'];
+  }
+
+  $res = $conn->query("SELECT COALESCE(SUM(amount), 0) as payments FROM supplier_payments WHERE status!='cancelled'");
+  if ($row = $res->fetch_assoc()) {
+    $stats['total_payments'] = (float)$row['payments'];
+  }
+
+  // Total outstanding
+  $res = $conn->query("SELECT COALESCE(SUM(total - COALESCE((SELECT COALESCE(SUM(amount), 0) FROM supplier_payment_allocations WHERE bill_id=sb.id), 0)), 0) as outstanding FROM supplier_bills sb WHERE sb.status IN ('unpaid', 'partial', 'overdue')");
+  if ($row = $res->fetch_assoc()) {
+    $stats['total_outstanding'] = (float)$row['outstanding'];
+  }
+
+  // Total overdue
+  $res = $conn->query("SELECT COALESCE(SUM(total - COALESCE((SELECT COALESCE(SUM(amount), 0) FROM supplier_payment_allocations WHERE bill_id=sb.id), 0)), 0) as overdue FROM supplier_bills sb WHERE sb.status='overdue'");
+  if ($row = $res->fetch_assoc()) {
+    $stats['total_overdue'] = (float)$row['overdue'];
+  }
+
+  // Recent bills
+  $res = $conn->query("SELECT sb.id, sb.bill_number, sb.total, sb.bill_date, sb.status, s.business_name FROM supplier_bills sb LEFT JOIN suppliers s ON sb.supplier_id = s.id ORDER BY sb.bill_date DESC, sb.id DESC LIMIT 5");
+  while ($row = $res->fetch_assoc()) {
+    $stats['recent_bills'][] = $row;
+  }
+
+  // Recent payments
+  $res = $conn->query("SELECT sp.id, sp.payment_number, sp.amount, sp.payment_date, sp.status, s.business_name FROM supplier_payments sp LEFT JOIN suppliers s ON sp.supplier_id = s.id ORDER BY sp.payment_date DESC, sp.id DESC LIMIT 5");
+  while ($row = $res->fetch_assoc()) {
+    $stats['recent_payments'][] = $row;
+  }
+
+  return $stats;
+}
