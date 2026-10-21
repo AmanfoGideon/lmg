@@ -3,6 +3,11 @@
 ## Overview
 This document summarizes the implementation of a complete Supplier Management and Accounts Payable module for the LMG Creative Media financial management system.
 
+## Current Repository Status
+The phase checklist later in this document is an earlier snapshot. The current source also includes supplier bill/payment pages, supplier statements, supplier payment receipts, and a supplier report. Recent changes add allocation-based balances, partial allocation status, reasoned allocation reversals, expense supplier editing, and in-place supplier creation from the expense form.
+
+The MySQL and Supabase migrations are source files only; they have not been applied in this environment. The PHP CLI could not connect to the configured MySQL database, so database workflows, RLS behavior, and migration execution still require verification against a controlled test database. No live financial records were created or changed.
+
 ## Completed Work (Phases 1-4)
 
 ### ✅ Phase 1: Schema Assessment & Implementation Plan
@@ -234,13 +239,13 @@ This document summarizes the implementation of a complete Supplier Management an
 ```bash
 # In MySQL console or PHPMyAdmin
 source D:\wamp64\www\CRM\business-management-system\migrations\20261021_suppliers.sql;
+source D:\wamp64\www\CRM\business-management-system\migrations\20261021_supplier_reversals.sql;
 ```
 
 ### Supabase Migration:
 Since Supabase CLI is not available in the environment:
-1. Copy the SQL from `supabase/migrations/202610210003_suppliers.sql`
-2. Run it in Supabase SQL Editor
-3. Or use the Supabase dashboard to apply the migration
+1. Apply `supabase/migrations/202610210003_suppliers.sql`
+2. Then apply `supabase/migrations/202610210004_supplier_reversals.sql`
 
 ## File Structure
 

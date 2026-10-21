@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS supplier_payments (
   reference_number VARCHAR(100),
   description TEXT,
   notes TEXT,
-  status ENUM('pending', 'allocated', 'unallocated', 'cancelled') DEFAULT 'unallocated',
+  status ENUM('pending', 'allocated', 'partially_allocated', 'unallocated', 'cancelled') DEFAULT 'unallocated',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   created_by INT NULL,
@@ -100,9 +100,12 @@ CREATE TABLE IF NOT EXISTS supplier_payment_allocations (
   amount DECIMAL(10,2) NOT NULL,
   allocated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   allocated_by INT NULL,
-  FOREIGN KEY (payment_id) REFERENCES supplier_payments(id) ON DELETE CASCADE,
+  reversed_at DATETIME NULL,
+  reversed_by INT NULL,
+  reversal_reason VARCHAR(500) NULL,
+  CONSTRAINT fk_supplier_allocations_payment FOREIGN KEY (payment_id) REFERENCES supplier_payments(id) ON DELETE RESTRICT,
   FOREIGN KEY (bill_id) REFERENCES supplier_bills(id) ON DELETE RESTRICT,
-  UNIQUE KEY uq_payment_bill_allocation (payment_id, bill_id)
+  KEY idx_payment_bill_allocation (payment_id, bill_id)
 );
 
 CREATE INDEX idx_payment_allocations_payment ON supplier_payment_allocations(payment_id);
@@ -128,3 +131,5 @@ ALTER TABLE supplier_payments ADD CONSTRAINT IF NOT EXISTS fk_supplier_payments_
 
 ALTER TABLE supplier_payment_allocations ADD CONSTRAINT IF NOT EXISTS fk_payment_allocations_allocated_by
   FOREIGN KEY (allocated_by) REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE supplier_payment_allocations ADD CONSTRAINT IF NOT EXISTS fk_payment_allocations_reversed_by
+  FOREIGN KEY (reversed_by) REFERENCES users(id) ON DELETE SET NULL;

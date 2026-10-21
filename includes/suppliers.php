@@ -7,6 +7,18 @@ declare(strict_types=1);
  */
 
 // Create a new supplier
+function supplier_amount_cents(mixed $value): int {
+    $amount = trim((string)$value);
+    if (!preg_match('/^(\d{1,8})(?:\.(\d{1,2}))?$/', $amount, $matches)) {
+        throw new InvalidArgumentException('Enter a valid amount with up to two decimal places.');
+    }
+    return ((int)$matches[1] * 100) + (int)str_pad($matches[2] ?? '', 2, '0');
+}
+
+function supplier_cents_decimal(int $cents): string {
+    return intdiv($cents, 100) . '.' . str_pad((string)($cents % 100), 2, '0', STR_PAD_LEFT);
+}
+
 function supplier_create(mysqli $conn, array $supplier): int {
     $business_name = trim((string)($supplier['business_name'] ?? ''));
     if ($business_name === '') {
@@ -148,38 +160,24 @@ function supplier_count(mysqli $conn, string $search = ''): int {
 
 // Get supplier financial summary
 function supplier_get_summary(mysqli $conn, int $supplier_id): array {
-    $summary = [
-        'total_purchases' => 0,
-        'total_paid' => 0,
-        'outstanding_balance' => 0,
-        'overdue_balance' => 0
-    ];
-
-    // Total purchases (bills)
-    $stmt = $conn->prepare("SELECT COALESCE(SUM(total), 0) as total FROM supplier_bills WHERE supplier_id=? AND status!='cancelled'");
+    $stmt = $conn->prepare("SELECT
+      COALESCE(SUM(CASE WHEN sb.status <> 'cancelled' THEN sb.total ELSE 0 END), 0) AS total_purchases,
+      COALESCE(SUM(CASE WHEN sb.status <> 'cancelled' THEN COALESCE(a.allocated, 0) ELSE 0 END), 0) AS total_paid,
+      COALESCE(SUM(CASE WHEN sb.status IN ('unpaid','partial','overdue') THEN GREATEST(sb.total - COALESCE(a.allocated, 0), 0) ELSE 0 END), 0) AS outstanding_balance,
+      COALESCE(SUM(CASE WHEN sb.status IN ('unpaid','partial','overdue') AND sb.due_date < CURRENT_DATE THEN GREATEST(sb.total - COALESCE(a.allocated, 0), 0) ELSE 0 END), 0) AS overdue_balance
+      FROM supplier_bills sb
+      LEFT JOIN (SELECT bill_id, SUM(amount) AS allocated FROM supplier_payment_allocations WHERE reversed_at IS NULL GROUP BY bill_id) a ON a.bill_id=sb.id
+      WHERE sb.supplier_id=?");
     $stmt->bind_param('i', $supplier_id);
     $stmt->execute();
-    $summary['total_purchases'] = (float)$stmt->get_result()->fetch_assoc()['total'];
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
     $stmt->close();
-
-    // Total paid (payments)
-    $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as total FROM supplier_payments WHERE supplier_id=? AND status!='cancelled'");
-    $stmt->bind_param('i', $supplier_id);
-    $stmt->execute();
-    $summary['total_paid'] = (float)$stmt->get_result()->fetch_assoc()['total'];
-    $stmt->close();
-
-    // Outstanding balance
-    $summary['outstanding_balance'] = max(0, $summary['total_purchases'] - $summary['total_paid']);
-
-    // Overdue balance
-    $stmt = $conn->prepare("SELECT COALESCE(SUM(total - COALESCE((SELECT COALESCE(SUM(amount), 0) FROM supplier_payment_allocations WHERE bill_id=sb.id), 0)), 0) as overdue FROM supplier_bills sb WHERE sb.supplier_id=? AND sb.status='overdue'");
-    $stmt->bind_param('i', $supplier_id);
-    $stmt->execute();
-    $summary['overdue_balance'] = (float)$stmt->get_result()->fetch_assoc()['overdue'];
-    $stmt->close();
-
-    return $summary;
+    $creditStmt = $conn->prepare("SELECT GREATEST(COALESCE(SUM(sp.amount), 0) - COALESCE((SELECT SUM(amount) FROM supplier_payment_allocations spa JOIN supplier_payments sp2 ON sp2.id=spa.payment_id WHERE sp2.supplier_id=? AND sp2.status<>'cancelled' AND spa.reversed_at IS NULL), 0), 0) AS credit_balance FROM supplier_payments sp WHERE sp.supplier_id=? AND sp.status<>'cancelled'");
+    $creditStmt->bind_param('ii', $supplier_id, $supplier_id);
+    $creditStmt->execute();
+    $row['unallocated_credit'] = (float)$creditStmt->get_result()->fetch_assoc()['credit_balance'];
+    $creditStmt->close();
+    return array_map(static fn($amount) => (float)$amount, $row);
 }
 
 // Create supplier bill
@@ -194,9 +192,12 @@ function supplier_bill_create(mysqli $conn, array $bill): int {
     $due_date = trim((string)($bill['due_date'] ?? ''));
     $description = trim((string)($bill['description'] ?? ''));
     $category = trim((string)($bill['category'] ?? ''));
-    $subtotal = (float)($bill['subtotal'] ?? 0);
-    $tax = (float)($bill['tax'] ?? 0);
-    $total = (float)($bill['total'] ?? 0);
+    $subtotalCents = supplier_amount_cents($bill['subtotal'] ?? '0');
+    $taxCents = supplier_amount_cents($bill['tax'] ?? '0');
+    $totalCents = supplier_amount_cents($bill['total'] ?? '0');
+    $subtotal = supplier_cents_decimal($subtotalCents);
+    $tax = supplier_cents_decimal($taxCents);
+    $total = supplier_cents_decimal($totalCents);
     $payment_terms = trim((string)($bill['payment_terms'] ?? ''));
     $notes = trim((string)($bill['notes'] ?? ''));
     $created_by = (int)($_SESSION['user_id'] ?? 0);
@@ -214,8 +215,8 @@ function supplier_bill_create(mysqli $conn, array $bill): int {
         throw new InvalidArgumentException('Invalid due date.');
     }
 
-    if ($total < 0) {
-        throw new InvalidArgumentException('Total cannot be negative.');
+    if ($totalCents <= 0 || $subtotalCents + $taxCents !== $totalCents) {
+        throw new InvalidArgumentException('Bill amounts must be positive and total must equal subtotal plus tax.');
     }
 
     $conn->begin_transaction();
@@ -230,7 +231,7 @@ function supplier_bill_create(mysqli $conn, array $bill): int {
         $check->close();
 
         $stmt = $conn->prepare("INSERT INTO supplier_bills (supplier_id, bill_number, bill_date, due_date, description, category, subtotal, tax, total, payment_terms, notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param('isssssddsss', $supplier_id, $bill_number, $bill_date, $due_date, $description, $category, $subtotal, $tax, $total, $payment_terms, $notes, $created_by);
+        $stmt->bind_param('issssssssssi', $supplier_id, $bill_number, $bill_date, $due_date, $description, $category, $subtotal, $tax, $total, $payment_terms, $notes, $created_by);
         $stmt->execute();
         $id = (int)$stmt->insert_id;
         $stmt->close();
@@ -257,7 +258,8 @@ function supplier_payment_create(mysqli $conn, array $payment): int {
 
     $payment_number = trim((string)($payment['payment_number'] ?? ''));
     $payment_date = trim((string)($payment['payment_date'] ?? date('Y-m-d')));
-    $amount = (float)($payment['amount'] ?? 0);
+    $amountCents = supplier_amount_cents($payment['amount'] ?? '0');
+    $amount = supplier_cents_decimal($amountCents);
     $payment_method = trim((string)($payment['payment_method'] ?? ''));
     $reference_number = trim((string)($payment['reference_number'] ?? ''));
     $description = trim((string)($payment['description'] ?? ''));
@@ -268,7 +270,7 @@ function supplier_payment_create(mysqli $conn, array $payment): int {
         throw new InvalidArgumentException('Invalid payment method.');
     }
 
-    if ($amount <= 0) {
+    if ($amountCents <= 0) {
         throw new InvalidArgumentException('Payment amount must be positive.');
     }
 
@@ -293,7 +295,7 @@ function supplier_payment_create(mysqli $conn, array $payment): int {
         $check->close();
 
         $stmt = $conn->prepare("INSERT INTO supplier_payments (supplier_id, payment_number, payment_date, amount, payment_method, reference_number, description, notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param('issdssssi', $supplier_id, $payment_number, $payment_date, $amount, $payment_method, $reference_number, $description, $notes, $created_by);
+        $stmt->bind_param('isssssssi', $supplier_id, $payment_number, $payment_date, $amount, $payment_method, $reference_number, $description, $notes, $created_by);
         $stmt->execute();
         $id = (int)$stmt->insert_id;
         $stmt->close();
@@ -312,10 +314,12 @@ function supplier_payment_create(mysqli $conn, array $payment): int {
 }
 
 // Allocate payment to bill
-function supplier_payment_allocate(mysqli $conn, int $payment_id, int $bill_id, float $amount): void {
-    if ($amount <= 0) {
+function supplier_payment_allocate(mysqli $conn, int $payment_id, int $bill_id, mixed $amountInput): void {
+    $amountCents = supplier_amount_cents($amountInput);
+    if ($amountCents <= 0) {
         throw new InvalidArgumentException('Allocation amount must be positive.');
     }
+    $amount = supplier_cents_decimal($amountCents);
 
     $conn->begin_transaction();
     try {
@@ -354,29 +358,29 @@ function supplier_payment_allocate(mysqli $conn, int $payment_id, int $bill_id, 
         }
 
         // Check existing allocations
-        $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE payment_id=?");
+        $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE payment_id=? AND reversed_at IS NULL");
         $stmt->bind_param('i', $payment_id);
         $stmt->execute();
-        $already_allocated = (float)$stmt->get_result()->fetch_assoc()['allocated'];
+        $already_allocated = (string)$stmt->get_result()->fetch_assoc()['allocated'];
         $stmt->close();
 
-        if ($already_allocated + $amount > $payment['amount']) {
+        if (supplier_amount_cents($already_allocated) + $amountCents > supplier_amount_cents($payment['amount'])) {
             throw new InvalidArgumentException('Allocation amount exceeds payment total.');
         }
 
         // Check bill remaining balance
-        $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE bill_id=?");
+        $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE bill_id=? AND reversed_at IS NULL");
         $stmt->bind_param('i', $bill_id);
         $stmt->execute();
-        $bill_allocated = (float)$stmt->get_result()->fetch_assoc()['allocated'];
+        $bill_allocated = (string)$stmt->get_result()->fetch_assoc()['allocated'];
         $stmt->close();
 
-        if ($bill_allocated + $amount > $bill['total']) {
+        if (supplier_amount_cents($bill_allocated) + $amountCents > supplier_amount_cents($bill['total'])) {
             throw new InvalidArgumentException('Allocation amount exceeds bill total.');
         }
 
         // Check for duplicate allocation
-        $stmt = $conn->prepare("SELECT id FROM supplier_payment_allocations WHERE payment_id=? AND bill_id=? LIMIT 1");
+        $stmt = $conn->prepare("SELECT id FROM supplier_payment_allocations WHERE payment_id=? AND bill_id=? AND reversed_at IS NULL LIMIT 1");
         $stmt->bind_param('ii', $payment_id, $bill_id);
         $stmt->execute();
         if ($stmt->get_result()->fetch_row()) {
@@ -387,18 +391,19 @@ function supplier_payment_allocate(mysqli $conn, int $payment_id, int $bill_id, 
         // Create allocation
         $allocated_by = (int)($_SESSION['user_id'] ?? 0);
         $stmt = $conn->prepare("INSERT INTO supplier_payment_allocations (payment_id, bill_id, amount, allocated_by) VALUES (?, ?, ?, ?)");
-        $stmt->bind_param('iidi', $payment_id, $bill_id, $amount, $allocated_by);
+        $stmt->bind_param('iisi', $payment_id, $bill_id, $amount, $allocated_by);
         $stmt->execute();
         $stmt->close();
 
         // Update payment status
-        $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE payment_id=?");
+        $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE payment_id=? AND reversed_at IS NULL");
         $stmt->bind_param('i', $payment_id);
         $stmt->execute();
-        $new_allocated = (float)$stmt->get_result()->fetch_assoc()['allocated'];
+        $new_allocated = (string)$stmt->get_result()->fetch_assoc()['allocated'];
         $stmt->close();
 
-        $new_status = $new_allocated >= $payment['amount'] ? 'allocated' : 'unallocated';
+        $newAllocatedCents = supplier_amount_cents($new_allocated);
+        $new_status = $newAllocatedCents >= supplier_amount_cents($payment['amount']) ? 'allocated' : ($newAllocatedCents > 0 ? 'partially_allocated' : 'unallocated');
         $stmt = $conn->prepare("UPDATE supplier_payments SET status=? WHERE id=?");
         $stmt->bind_param('si', $new_status, $payment_id);
         $stmt->execute();
@@ -431,13 +436,16 @@ function supplier_bill_recalculate_status(mysqli $conn, int $bill_id): void {
         return;
     }
 
-    $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE bill_id=?");
+    $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE bill_id=? AND reversed_at IS NULL");
     $stmt->bind_param('i', $bill_id);
     $stmt->execute();
-    $allocated = (float)$stmt->get_result()->fetch_assoc()['allocated'];
+    $allocated = (string)$stmt->get_result()->fetch_assoc()['allocated'];
     $stmt->close();
 
-    $status = $allocated >= $bill['total'] ? 'paid' : ($allocated > 0 ? 'partial' : 'unpaid');
+    if ($bill['status'] === 'cancelled') return;
+    $allocatedCents = supplier_amount_cents($allocated);
+    $totalCents = supplier_amount_cents($bill['total']);
+    $status = $allocatedCents >= $totalCents ? 'paid' : ($allocatedCents > 0 ? 'partial' : 'unpaid');
 
     // Check if overdue
     if (($status === 'unpaid' || $status === 'partial') && $bill['due_date'] && $bill['due_date'] < date('Y-m-d')) {
@@ -462,9 +470,12 @@ function supplier_bill_update(mysqli $conn, int $bill_id, array $bill): void {
   $due_date = trim((string)($bill['due_date'] ?? ''));
   $description = trim((string)($bill['description'] ?? ''));
   $category = trim((string)($bill['category'] ?? ''));
-  $subtotal = (float)($bill['subtotal'] ?? 0);
-  $tax = (float)($bill['tax'] ?? 0);
-  $total = (float)($bill['total'] ?? 0);
+  $subtotalCents = supplier_amount_cents($bill['subtotal'] ?? '0');
+  $taxCents = supplier_amount_cents($bill['tax'] ?? '0');
+  $totalCents = supplier_amount_cents($bill['total'] ?? '0');
+  $subtotal = supplier_cents_decimal($subtotalCents);
+  $tax = supplier_cents_decimal($taxCents);
+  $total = supplier_cents_decimal($totalCents);
   $payment_terms = trim((string)($bill['payment_terms'] ?? ''));
   $notes = trim((string)($bill['notes'] ?? ''));
   $updated_by = (int)($_SESSION['user_id'] ?? 0);
@@ -477,8 +488,8 @@ function supplier_bill_update(mysqli $conn, int $bill_id, array $bill): void {
     throw new InvalidArgumentException('Invalid due date.');
   }
 
-  if ($total < 0) {
-    throw new InvalidArgumentException('Total cannot be negative.');
+  if ($totalCents <= 0 || $subtotalCents + $taxCents !== $totalCents) {
+    throw new InvalidArgumentException('Bill amounts must be positive and total must equal subtotal plus tax.');
   }
 
   $conn->begin_transaction();
@@ -497,6 +508,18 @@ function supplier_bill_update(mysqli $conn, int $bill_id, array $bill): void {
       throw new InvalidArgumentException('Cannot update cancelled bills.');
     }
 
+    $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) AS allocated FROM supplier_payment_allocations WHERE bill_id=? AND reversed_at IS NULL");
+    $stmt->bind_param('i', $bill_id);
+    $stmt->execute();
+    $allocated = (string)$stmt->get_result()->fetch_assoc()['allocated'];
+    $stmt->close();
+    if ($supplier_id !== (int)$existing['supplier_id'] && supplier_amount_cents($allocated) > 0) {
+      throw new InvalidArgumentException('A bill with allocated payments cannot be moved to another supplier.');
+    }
+    if ($totalCents < supplier_amount_cents($allocated)) {
+      throw new InvalidArgumentException('Bill total cannot be reduced below its allocated payments.');
+    }
+
     // Check for duplicate bill number if changed
     if ($bill_number !== $existing['bill_number']) {
       $check = $conn->prepare("SELECT id FROM supplier_bills WHERE supplier_id=? AND bill_number=? AND id!=? LIMIT 1");
@@ -509,7 +532,7 @@ function supplier_bill_update(mysqli $conn, int $bill_id, array $bill): void {
     }
 
     $stmt = $conn->prepare("UPDATE supplier_bills SET supplier_id=?, bill_number=?, bill_date=?, due_date=?, description=?, category=?, subtotal=?, tax=?, total=?, payment_terms=?, notes=?, updated_by=? WHERE id=?");
-    $stmt->bind_param('isssssddsssi', $supplier_id, $bill_number, $bill_date, $due_date, $description, $category, $subtotal, $tax, $total, $payment_terms, $notes, $updated_by, $bill_id);
+    $stmt->bind_param('issssssssssii', $supplier_id, $bill_number, $bill_date, $due_date, $description, $category, $subtotal, $tax, $total, $payment_terms, $notes, $updated_by, $bill_id);
     $stmt->execute();
     $stmt->close();
 
@@ -552,17 +575,17 @@ function supplier_bill_cancel(mysqli $conn, int $bill_id, string $reason): void 
     }
 
     // Check if there are allocated payments
-    $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE bill_id=?");
+    $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE bill_id=? AND reversed_at IS NULL");
     $stmt->bind_param('i', $bill_id);
     $stmt->execute();
-    $allocated = (float)$stmt->get_result()->fetch_assoc()['allocated'];
+    $allocated = (string)$stmt->get_result()->fetch_assoc()['allocated'];
     $stmt->close();
 
-    if ($allocated > 0) {
+      if (supplier_amount_cents($allocated) > 0) {
       throw new InvalidArgumentException('Cannot cancel bill with allocated payments. Remove allocations first.');
     }
 
-    $stmt = $conn->prepare("UPDATE supplier_bills SET status='cancelled', notes=CONCAT(COALES(notes, ''), '\n\nCancellation: ', ?) WHERE id=?");
+    $stmt = $conn->prepare("UPDATE supplier_bills SET status='cancelled', notes=CONCAT(COALESCE(notes, ''), '\n\nCancellation: ', ?) WHERE id=?");
     $stmt->bind_param('si', $reason, $bill_id);
     $stmt->execute();
     $stmt->close();
@@ -671,7 +694,7 @@ function supplier_bill_count(mysqli $conn, ?int $supplier_id = null, string $sta
 
 // Get bill allocation details
 function supplier_bill_get_allocations(mysqli $conn, int $bill_id): array {
-  $stmt = $conn->prepare("SELECT spa.*, sp.payment_number, sp.payment_date, sp.payment_method FROM supplier_payment_allocations spa LEFT JOIN supplier_payments sp ON spa.payment_id = sp.id WHERE spa.bill_id=? ORDER BY spa.allocated_at DESC");
+  $stmt = $conn->prepare("SELECT spa.*, sp.payment_number, sp.payment_date, sp.payment_method FROM supplier_payment_allocations spa LEFT JOIN supplier_payments sp ON spa.payment_id = sp.id WHERE spa.bill_id=? AND spa.reversed_at IS NULL ORDER BY spa.allocated_at DESC");
   $stmt->bind_param('i', $bill_id);
   $stmt->execute();
   $result = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
@@ -689,7 +712,8 @@ function supplier_payment_update(mysqli $conn, int $payment_id, array $payment):
 
   $payment_number = trim((string)($payment['payment_number'] ?? ''));
   $payment_date = trim((string)($payment['payment_date'] ?? ''));
-  $amount = (float)($payment['amount'] ?? 0);
+  $amountCents = supplier_amount_cents($payment['amount'] ?? '0');
+  $amount = supplier_cents_decimal($amountCents);
   $payment_method = trim((string)($payment['payment_method'] ?? ''));
   $reference_number = trim((string)($payment['reference_number'] ?? ''));
   $description = trim((string)($payment['description'] ?? ''));
@@ -700,7 +724,7 @@ function supplier_payment_update(mysqli $conn, int $payment_id, array $payment):
     throw new InvalidArgumentException('Invalid payment method.');
   }
 
-  if ($amount <= 0) {
+  if ($amountCents <= 0) {
     throw new InvalidArgumentException('Payment amount must be positive.');
   }
 
@@ -724,6 +748,15 @@ function supplier_payment_update(mysqli $conn, int $payment_id, array $payment):
       throw new InvalidArgumentException('Cannot update cancelled payments.');
     }
 
+    $allocationCheck = $conn->prepare("SELECT COUNT(*) AS count FROM supplier_payment_allocations WHERE payment_id=? AND reversed_at IS NULL");
+    $allocationCheck->bind_param('i', $payment_id);
+    $allocationCheck->execute();
+    $hasActiveAllocations = (int)$allocationCheck->get_result()->fetch_assoc()['count'] > 0;
+    $allocationCheck->close();
+    if ($hasActiveAllocations && $supplier_id !== (int)$existing['supplier_id']) {
+      throw new InvalidArgumentException('Reverse the payment allocations before changing its supplier.');
+    }
+
     // Check for duplicate payment number if changed
     if ($payment_number !== $existing['payment_number']) {
       $check = $conn->prepare("SELECT id FROM supplier_payments WHERE supplier_id=? AND payment_number=? AND id!=? LIMIT 1");
@@ -736,20 +769,20 @@ function supplier_payment_update(mysqli $conn, int $payment_id, array $payment):
     }
 
     // Check if amount is being reduced and would break allocations
-    if ($amount < $existing['amount']) {
-      $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE payment_id=?");
+    if ($amountCents < supplier_amount_cents($existing['amount'])) {
+      $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE payment_id=? AND reversed_at IS NULL");
       $stmt->bind_param('i', $payment_id);
       $stmt->execute();
-      $allocated = (float)$stmt->get_result()->fetch_assoc()['allocated'];
+      $allocated = (string)$stmt->get_result()->fetch_assoc()['allocated'];
       $stmt->close();
 
-      if ($allocated > $amount) {
+      if (supplier_amount_cents($allocated) > $amountCents) {
         throw new InvalidArgumentException('Cannot reduce payment amount below allocated amount. Remove allocations first.');
       }
     }
 
     $stmt = $conn->prepare("UPDATE supplier_payments SET supplier_id=?, payment_number=?, payment_date=?, amount=?, payment_method=?, reference_number=?, description=?, notes=?, updated_by=? WHERE id=?");
-    $stmt->bind_param('issdsssssi', $supplier_id, $payment_number, $payment_date, $amount, $payment_method, $reference_number, $description, $notes, $updated_by, $payment_id);
+    $stmt->bind_param('issssssssi', $supplier_id, $payment_number, $payment_date, $amount, $payment_method, $reference_number, $description, $notes, $updated_by, $payment_id);
     $stmt->execute();
     $stmt->close();
 
@@ -760,13 +793,14 @@ function supplier_payment_update(mysqli $conn, int $payment_id, array $payment):
     ]);
 
     // Recalculate payment status
-    $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE payment_id=?");
+    $stmt = $conn->prepare("SELECT COALESCE(SUM(amount), 0) as allocated FROM supplier_payment_allocations WHERE payment_id=? AND reversed_at IS NULL");
     $stmt->bind_param('i', $payment_id);
     $stmt->execute();
-    $new_allocated = (float)$stmt->get_result()->fetch_assoc()['allocated'];
+    $new_allocated = (string)$stmt->get_result()->fetch_assoc()['allocated'];
     $stmt->close();
 
-    $new_status = $new_allocated >= $amount ? 'allocated' : 'unallocated';
+    $newAllocatedCents = supplier_amount_cents($new_allocated);
+    $new_status = $newAllocatedCents >= $amountCents ? 'allocated' : ($newAllocatedCents > 0 ? 'partially_allocated' : 'unallocated');
     $stmt = $conn->prepare("UPDATE supplier_payments SET status=? WHERE id=?");
     $stmt->bind_param('si', $new_status, $payment_id);
     $stmt->execute();
@@ -816,14 +850,14 @@ function supplier_payment_cancel(mysqli $conn, int $payment_id, string $reason):
     }
 
     // Check if there are allocations
-    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM supplier_payment_allocations WHERE payment_id=?");
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM supplier_payment_allocations WHERE payment_id=? AND reversed_at IS NULL");
     $stmt->bind_param('i', $payment_id);
     $stmt->execute();
     $allocation_count = (int)$stmt->get_result()->fetch_assoc()['count'];
     $stmt->close();
 
     if ($allocation_count > 0) {
-      throw new InvalidArgumentException('Cannot cancel payment with allocations. Remove allocations first.');
+      throw new InvalidArgumentException('A payment with allocations cannot be cancelled. Reverse its allocations first to preserve the payment history.');
     }
 
     $stmt = $conn->prepare("UPDATE supplier_payments SET status='cancelled', notes=CONCAT(COALESCE(notes, ''), '\n\nCancellation: ', ?) WHERE id=?");
@@ -845,10 +879,11 @@ function supplier_payment_cancel(mysqli $conn, int $payment_id, string $reason):
 }
 
 // Remove payment allocation
-function supplier_payment_remove_allocation(mysqli $conn, int $payment_id, int $bill_id): void {
+function supplier_payment_remove_allocation(mysqli $conn, int $payment_id, int $bill_id, string $reason): void {
+  if (trim($reason) === '') throw new InvalidArgumentException('Allocation reversal reason is required.');
   $conn->begin_transaction();
   try {
-    $stmt = $conn->prepare("SELECT amount FROM supplier_payment_allocations WHERE payment_id=? AND bill_id=? LIMIT 1 FOR UPDATE");
+    $stmt = $conn->prepare("SELECT id, amount FROM supplier_payment_allocations WHERE payment_id=? AND bill_id=? AND reversed_at IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE");
     $stmt->bind_param('ii', $payment_id, $bill_id);
     $stmt->execute();
     $allocation = $stmt->get_result()->fetch_assoc();
@@ -858,20 +893,25 @@ function supplier_payment_remove_allocation(mysqli $conn, int $payment_id, int $
       throw new InvalidArgumentException('Allocation not found.');
     }
 
-    $stmt = $conn->prepare("DELETE FROM supplier_payment_allocations WHERE payment_id=? AND bill_id=?");
-    $stmt->bind_param('ii', $payment_id, $bill_id);
+    $allocationId = (int)$allocation['id'];
+    $reason = trim($reason);
+    $actorId = (int)($_SESSION['user_id'] ?? 0);
+    $stmt = $conn->prepare("UPDATE supplier_payment_allocations SET reversed_at=UTC_TIMESTAMP(), reversed_by=?, reversal_reason=? WHERE id=? AND reversed_at IS NULL");
+    $stmt->bind_param('isi', $actorId, $reason, $allocationId);
     $stmt->execute();
     $stmt->close();
 
     // Update payment status
-    $stmt = $conn->prepare("SELECT sp.amount, COALESCE(SUM(spa.amount), 0) as allocated FROM supplier_payments sp LEFT JOIN supplier_payment_allocations spa ON sp.id = spa.payment_id WHERE sp.id=? GROUP BY sp.id, sp.amount");
+    $stmt = $conn->prepare("SELECT sp.amount, COALESCE(SUM(CASE WHEN spa.reversed_at IS NULL THEN spa.amount ELSE 0 END), 0) as allocated FROM supplier_payments sp LEFT JOIN supplier_payment_allocations spa ON sp.id = spa.payment_id WHERE sp.id=? GROUP BY sp.id, sp.amount");
     $stmt->bind_param('i', $payment_id);
     $stmt->execute();
     $payment_data = $stmt->get_result()->fetch_assoc();
     $stmt->close();
 
     if ($payment_data) {
-      $new_status = ($payment_data['allocated'] ?? 0) >= $payment_data['amount'] ? 'allocated' : 'unallocated';
+      $paymentAllocatedCents = supplier_amount_cents($payment_data['allocated'] ?? '0');
+      $paymentAmountCents = supplier_amount_cents($payment_data['amount']);
+      $new_status = $paymentAllocatedCents >= $paymentAmountCents ? 'allocated' : ($paymentAllocatedCents > 0 ? 'partially_allocated' : 'unallocated');
       $stmt = $conn->prepare("UPDATE supplier_payments SET status=? WHERE id=?");
       $stmt->bind_param('si', $new_status, $payment_id);
       $stmt->execute();
@@ -881,9 +921,10 @@ function supplier_payment_remove_allocation(mysqli $conn, int $payment_id, int $
     // Recalculate bill status
     supplier_bill_recalculate_status($conn, $bill_id);
 
-    log_action($conn, 'supplier_payment_remove_allocation', "$payment_id|$bill_id", [
+    log_action($conn, 'supplier_payment_allocation_reversal', "$payment_id|$bill_id", [
       'entity_id' => (string)$payment_id,
-      'old_values' => ['payment_id' => $payment_id, 'bill_id' => $bill_id, 'amount' => $allocation['amount']]
+      'old_values' => ['payment_id' => $payment_id, 'bill_id' => $bill_id, 'amount' => $allocation['amount']],
+      'new_values' => ['status' => 'reversed', 'reason' => $reason]
     ]);
 
     $conn->commit();
@@ -915,7 +956,7 @@ function supplier_payment_list(mysqli $conn, ?int $supplier_id = null, string $s
     $types .= 'i';
   }
 
-  if ($status_filter !== '' && in_array($status_filter, ['pending', 'allocated', 'unallocated', 'cancelled'])) {
+  if ($status_filter !== '' && in_array($status_filter, ['pending', 'allocated', 'partially_allocated', 'unallocated', 'cancelled'])) {
     $where .= ' AND sp.status=?';
     $params[] = $status_filter;
     $types .= 's';
@@ -956,7 +997,7 @@ function supplier_payment_count(mysqli $conn, ?int $supplier_id = null, string $
     $types .= 'i';
   }
 
-  if ($status_filter !== '' && in_array($status_filter, ['pending', 'allocated', 'unallocated', 'cancelled'])) {
+  if ($status_filter !== '' && in_array($status_filter, ['pending', 'allocated', 'partially_allocated', 'unallocated', 'cancelled'])) {
     $where .= ' AND status=?';
     $params[] = $status_filter;
     $types .= 's';
@@ -984,7 +1025,7 @@ function supplier_payment_count(mysqli $conn, ?int $supplier_id = null, string $
 
 // Get payment allocation details
 function supplier_payment_get_allocations(mysqli $conn, int $payment_id): array {
-  $stmt = $conn->prepare("SELECT spa.*, sb.bill_number, sb.bill_date, sb.total as bill_total FROM supplier_payment_allocations spa LEFT JOIN supplier_bills sb ON spa.bill_id = sb.id WHERE spa.payment_id=? ORDER BY spa.allocated_at DESC");
+  $stmt = $conn->prepare("SELECT spa.*, sb.bill_number, sb.bill_date, sb.total as bill_total, sp.payment_number FROM supplier_payment_allocations spa LEFT JOIN supplier_bills sb ON spa.bill_id = sb.id LEFT JOIN supplier_payments sp ON spa.payment_id=sp.id WHERE spa.payment_id=? ORDER BY spa.allocated_at DESC");
   $stmt->bind_param('i', $payment_id);
   $stmt->execute();
   $result = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
@@ -1025,13 +1066,13 @@ function supplier_get_stats(mysqli $conn): array {
   }
 
   // Total outstanding
-  $res = $conn->query("SELECT COALESCE(SUM(total - COALESCE((SELECT COALESCE(SUM(amount), 0) FROM supplier_payment_allocations WHERE bill_id=sb.id), 0)), 0) as outstanding FROM supplier_bills sb WHERE sb.status IN ('unpaid', 'partial', 'overdue')");
+  $res = $conn->query("SELECT COALESCE(SUM(GREATEST(sb.total - COALESCE(a.allocated, 0), 0)), 0) AS outstanding FROM supplier_bills sb LEFT JOIN (SELECT bill_id, SUM(amount) AS allocated FROM supplier_payment_allocations WHERE reversed_at IS NULL GROUP BY bill_id) a ON a.bill_id=sb.id WHERE sb.status IN ('unpaid', 'partial', 'overdue')");
   if ($row = $res->fetch_assoc()) {
     $stats['total_outstanding'] = (float)$row['outstanding'];
   }
 
   // Total overdue
-  $res = $conn->query("SELECT COALESCE(SUM(total - COALESCE((SELECT COALESCE(SUM(amount), 0) FROM supplier_payment_allocations WHERE bill_id=sb.id), 0)), 0) as overdue FROM supplier_bills sb WHERE sb.status='overdue'");
+  $res = $conn->query("SELECT COALESCE(SUM(GREATEST(sb.total - COALESCE(a.allocated, 0), 0)), 0) AS overdue FROM supplier_bills sb LEFT JOIN (SELECT bill_id, SUM(amount) AS allocated FROM supplier_payment_allocations WHERE reversed_at IS NULL GROUP BY bill_id) a ON a.bill_id=sb.id WHERE sb.status IN ('unpaid','partial','overdue') AND sb.due_date < CURRENT_DATE");
   if ($row = $res->fetch_assoc()) {
     $stats['total_overdue'] = (float)$row['overdue'];
   }
@@ -1043,7 +1084,7 @@ function supplier_get_stats(mysqli $conn): array {
   }
 
   // Recent payments
-  $res = $conn->query("SELECT sp.id, sp.payment_number, sp.amount, sp.payment_date, sp.status, s.business_name FROM supplier_payments sp LEFT JOIN suppliers s ON sp.supplier_id = s.id ORDER BY sp.payment_date DESC, sp.id DESC LIMIT 5");
+  $res = $conn->query("SELECT sp.id, sp.payment_number, sp.amount, sp.payment_date, sp.status, s.business_name FROM supplier_payments sp LEFT JOIN suppliers s ON sp.supplier_id = s.id WHERE sp.status <> 'cancelled' ORDER BY sp.payment_date DESC, sp.id DESC LIMIT 5");
   while ($row = $res->fetch_assoc()) {
     $stats['recent_payments'][] = $row;
   }

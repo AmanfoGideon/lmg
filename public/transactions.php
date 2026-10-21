@@ -6,6 +6,8 @@ require_once "../includes/invoice.php";
 require_once "../includes/suppliers.php";
 
 $message = '';
+$createdSupplierId = null;
+$transactionSupplierValid = true;
 $transactionRequestKey = bin2hex(random_bytes(16));
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   if (!csrf_verify()) {
@@ -59,7 +61,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       }
     } elseif ($client_id > 0) {
       if ($payment_method && !in_array($payment_method, ['cash','mobile','card'])) { $payment_method = null; }
-      $supplier_id = (int)($_POST['supplier_id'] ?? 0);
+      $supplier_id = $type === 'expense' && (int)($_POST['supplier_id'] ?? 0) > 0 ? (int)$_POST['supplier_id'] : null;
+      if ($supplier_id !== null) {
+        $supplierCheck = $conn->prepare("SELECT id FROM suppliers WHERE id=? AND status='active'");
+        $supplierCheck->bind_param('i', $supplier_id);
+        $supplierCheck->execute();
+        $supplierExists = (bool)$supplierCheck->get_result()->fetch_row();
+        $supplierCheck->close();
+        if (!$supplierExists) {
+          $transactionSupplierValid = false;
+          $message = 'Select an active supplier or choose No Supplier.';
+        }
+      }
+      if (!$transactionSupplierValid) {
+        $client_id = 0;
+      }
+      if ($client_id <= 0) {
+        $message = $message ?: 'Specify a client by name';
+      } else {
       $conn->begin_transaction();
       $stmt = $conn->prepare("INSERT INTO transactions (client_id, supplier_id, amount, type, payment_method, description, date) VALUES (?,?,?,?,?,?,?)");
       $stmt->bind_param('iidssss', $client_id, $supplier_id, $amount, $type, $payment_method, $description, $date);
@@ -75,6 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $conn->rollback();
       }
       $stmt->close();
+      }
     } else {
       $message = 'Specify a client by name';
     }
@@ -92,12 +112,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           'status' => 'active'
         ];
         $supplier_id = supplier_create($conn, $supplier);
+        $createdSupplierId = $supplier_id;
         $message = 'Supplier created successfully';
       } catch (InvalidArgumentException $e) {
         $message = $e->getMessage();
       } catch (Throwable $e) {
         $message = 'Supplier could not be created. Please try again.';
         error_log('Supplier creation failed: ' . $e->getMessage());
+      }
+      if (strtolower((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '')) === 'xmlhttprequest') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => $createdSupplierId !== null, 'id' => $createdSupplierId, 'business_name' => $supplier['business_name'] ?? '', 'message' => $message], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
       }
     } elseif ($action === 'delete') {
       $txId = (int)($_POST['id'] ?? 0);
@@ -143,7 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($action === 'update') {
       $txId = (int)($_POST['id'] ?? 0);
       if ($txId > 0) {
-        $oldStmt = $conn->prepare("SELECT client_id, amount, type, date, payment_method, description, invoice_id FROM transactions WHERE id=? LIMIT 1");
+        $oldStmt = $conn->prepare("SELECT client_id, supplier_id, amount, type, date, payment_method, description, invoice_id FROM transactions WHERE id=? LIMIT 1");
         $oldStmt->bind_param('i', $txId);
         $oldStmt->execute();
         $oldResult = $oldStmt->get_result();
@@ -156,16 +182,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $description = trim($_POST['description'] ?? '');
         $date = $_POST['date'] ?: date('Y-m-d');
         $invoice_id = (int)($_POST['invoice_id'] ?? 0);
+        $supplier_id = $type === 'expense' && (int)($_POST['supplier_id'] ?? 0) > 0 ? (int)$_POST['supplier_id'] : null;
         if (!in_array($type, ['income','expense','invoice','payment'])) { $type = 'income'; }
-        $upd = $conn->prepare("UPDATE transactions SET amount=?, type=?, payment_method=?, description=?, date=?, invoice_id=? WHERE id=?");
-        $upd->bind_param('dssssii', $amount, $type, $payment_method, $description, $date, $invoice_id, $txId);
+        if ($type === 'expense' && $supplier_id !== null) {
+          $supplierCheck = $conn->prepare("SELECT id FROM suppliers WHERE id=? AND (status='active' OR id=?)");
+          $supplierCheck->bind_param('ii', $supplier_id, $supplier_id);
+          $supplierCheck->execute();
+          $supplierExists = (bool)$supplierCheck->get_result()->fetch_row();
+          $supplierCheck->close();
+          if (!$supplierExists) throw new InvalidArgumentException('Select a valid supplier.');
+        }
+        $upd = $conn->prepare("UPDATE transactions SET amount=?, type=?, payment_method=?, description=?, date=?, invoice_id=?, supplier_id=? WHERE id=?");
+        $upd->bind_param('dssssiii', $amount, $type, $payment_method, $description, $date, $invoice_id, $supplier_id, $txId);
         if ($upd->execute() && $upd->affected_rows > 0) {
           $message = 'Transaction updated';
           if ($oldTx) {
             log_action($conn, 'transaction_update', (string)$txId.'|'.$type.'|'.$amount, [
               'entity_id' => (string)$txId,
               'old_values' => $oldTx,
-              'new_values' => ['client_id'=>(int)$oldTx['client_id'],'amount'=>$amount,'type'=>$type,'date'=>$date,'payment_method'=>$payment_method,'description'=>$description,'invoice_id'=>$invoice_id ?: null]
+              'new_values' => ['client_id'=>(int)$oldTx['client_id'],'supplier_id'=>$supplier_id,'amount'=>$amount,'type'=>$type,'date'=>$date,'payment_method'=>$payment_method,'description'=>$description,'invoice_id'=>$invoice_id ?: null]
             ]);
           }
           // Recalculate invoice status if this was or is an invoice payment
@@ -207,14 +242,18 @@ $clients = $conn->query("SELECT id, full_name FROM clients ORDER BY full_name AS
 $clientsArr = [];
 while ($cRow = $clients->fetch_assoc()) { $clientsArr[] = $cRow; }
 
-$suppliers = $conn->query("SELECT id, business_name FROM suppliers WHERE status='active' ORDER BY business_name ASC");
+$suppliers = $conn->query("SELECT id, business_name, contact_person, phone FROM suppliers WHERE status='active' ORDER BY business_name ASC");
 $suppliersArr = [];
 while ($sRow = $suppliers->fetch_assoc()) { $suppliersArr[] = $sRow; }
+$allSuppliersResult = $conn->query("SELECT id, business_name, contact_person, phone, status FROM suppliers ORDER BY business_name ASC");
+$allSuppliersArr = [];
+while ($sRow = $allSuppliersResult->fetch_assoc()) { $allSuppliersArr[] = $sRow; }
 $txLimit = (isset($_GET['format']) && $_GET['format'] === 'json') ? ' LIMIT 100' : '';
-$tx = $conn->query("SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, t.invoice_id, c.full_name AS client, i.invoice_number
+$tx = $conn->query("SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, t.invoice_id, t.supplier_id, c.full_name AS client, i.invoice_number, s.business_name AS supplier_name
                     FROM transactions t
                     LEFT JOIN clients c ON c.id=t.client_id
                     LEFT JOIN invoices i ON i.id=t.invoice_id
+                    LEFT JOIN suppliers s ON s.id=t.supplier_id
                     ORDER BY t.date DESC, t.id DESC".$txLimit);
 $userName = htmlspecialchars($_SESSION['full_name']);
 $role = $_SESSION['role'] ?? 'staff';
@@ -227,6 +266,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       'type' => (string)$row['type'],
       'invoice_id' => isset($row['invoice_id']) ? (int)$row['invoice_id'] : null,
       'invoice_number' => (string)($row['invoice_number'] ?? ''),
+      'supplier_id' => isset($row['supplier_id']) ? (int)$row['supplier_id'] : null,
       'amount' => (float)$row['amount'],
       'date' => (string)$row['date'],
       'payment_method' => (string)($row['payment_method'] ?? ''),
@@ -291,11 +331,12 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
             </div>
             <div class="col-12">
               <label class="form-label">Supplier (Optional)</label>
+              <input class="form-control form-control-sm mb-1" type="search" id="supplierSearchTx" placeholder="Search suppliers by name, contact, or phone">
               <div class="input-group">
                 <select class="form-select" name="supplier_id" id="supplierIdTx">
                   <option value="">No Supplier</option>
                   <?php foreach($suppliersArr as $s): ?>
-                    <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['business_name']) ?></option>
+                    <option value="<?= (int)$s['id'] ?>" data-search="<?= htmlspecialchars(strtolower($s['business_name'].' '.$s['contact_person'].' '.$s['phone']), ENT_QUOTES) ?>"><?= htmlspecialchars($s['business_name']) ?></option>
                   <?php endforeach; ?>
                 </select>
                 <button type="button" class="btn btn-outline-light" id="addSupplierBtn" title="Add New Supplier">+</button>
@@ -353,6 +394,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                   <th>Client</th>
                   <th>Type</th>
                   <th>Invoice #</th>
+                  <th>Supplier</th>
                   <th>Amount</th>
                   <th>Date</th>
                   <th>Method</th>
@@ -371,6 +413,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                       <a class="link-light" href="invoice_view.php?id=<?= (int)$t['invoice_id'] ?>"><?= htmlspecialchars($t['invoice_number']) ?></a>
                     <?php endif; ?>
                   </td>
+                  <td class="text-muted small"><?= htmlspecialchars($t['supplier_name'] ?? '') ?></td>
                   <td><?= fmtCurrency((float)$t['amount']) ?></td>
                   <td class="text-muted small"><?= htmlspecialchars($t['date']) ?></td>
                   <td class="text-muted small"><?= htmlspecialchars($t['payment_method'] ?? '') ?></td>
@@ -385,6 +428,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                       data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES) ?>"
                       data-invoice-id="<?= (int)($t['invoice_id'] ?? 0) ?>"
                       data-invoice-number="<?= htmlspecialchars($t['invoice_number'] ?? '', ENT_QUOTES) ?>"
+                      data-supplier-id="<?= (int)($t['supplier_id'] ?? 0) ?>"
                       data-amount="<?= htmlspecialchars($t['amount']) ?>"
                       data-date="<?= htmlspecialchars($t['date']) ?>"
                       data-method="<?= htmlspecialchars($t['payment_method'] ?? '', ENT_QUOTES) ?>"
@@ -503,6 +547,16 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
               <label class="form-label">Invoice # (for Payment)</label>
               <input class="form-control" list="invoicesDatalist" name="invoice_number" id="editInvoiceNumber" placeholder="Type invoice number to link">
               <input type="hidden" name="invoice_id" id="editInvoiceId">
+            </div>
+            <div class="col-12" id="editSupplierRow">
+              <label class="form-label">Supplier (Optional)</label>
+              <input class="form-control form-control-sm mb-1" type="search" id="editSupplierSearch" placeholder="Search suppliers by name, contact, or phone">
+              <select class="form-select" name="supplier_id" id="editSupplierId">
+                <option value="">No Supplier</option>
+                <?php foreach($allSuppliersArr as $s): ?>
+                  <option value="<?= (int)$s['id'] ?>" data-search="<?= htmlspecialchars(strtolower($s['business_name'].' '.$s['contact_person'].' '.$s['phone']), ENT_QUOTES) ?>"><?= htmlspecialchars($s['business_name']) ?><?= $s['status'] === 'inactive' ? ' (Inactive)' : '' ?></option>
+                <?php endforeach; ?>
+              </select>
             </div>
             <div class="col-6">
               <label class="form-label">Method</label>
@@ -631,6 +685,14 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   const addSupplierForm = document.getElementById('addSupplierForm');
   const supplierSelect = document.getElementById('supplierIdTx');
   const typeSelect = document.getElementById('typeSelect');
+  const supplierSearch = document.getElementById('supplierSearchTx');
+
+  supplierSearch.addEventListener('input', function() {
+    const term = this.value.trim().toLowerCase();
+    Array.from(supplierSelect.options).forEach(function(option) {
+      if (option.value) option.hidden = !option.dataset.search.includes(term);
+    });
+  });
 
   addSupplierBtn.addEventListener('click', function() {
     addSupplierBsModal.show();
@@ -645,24 +707,27 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     
     fetch('transactions.php', {
       method: 'POST',
-      body: formData
+      body: formData,
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
     })
-    .then(response => response.text())
-    .then(text => {
-      // Parse the response to check for success message
-      if (text.includes('Supplier created successfully')) {
-        // Close modal and reload to update dropdown
+    .then(response => response.json())
+    .then(result => {
+      if (result.success) {
+        const option = new Option(result.business_name, result.id, true, true);
+        supplierSelect.add(option);
+        supplierSelect.value = result.id;
+        addSupplierForm.reset();
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Add Supplier';
         addSupplierBsModal.hide();
-        window.location.reload();
       } else {
-        // Show error
-        alert('Error creating supplier. Please try again.');
+        alert(result.message || 'Supplier could not be created.');
         submitBtn.disabled = false;
         submitBtn.textContent = 'Add Supplier';
       }
     })
     .catch(error => {
-      alert('Error creating supplier: ' + error.message);
+      alert('Supplier could not be created. Check your connection and try again.');
       submitBtn.disabled = false;
       submitBtn.textContent = 'Add Supplier';
     });
@@ -694,6 +759,9 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     const fMethod = document.getElementById('editMethod');
     const fDate = document.getElementById('editDate');
     const fDesc = document.getElementById('editDesc');
+    const fSupplier = document.getElementById('editSupplierId');
+    const supplierRow = document.getElementById('editSupplierRow');
+    const supplierSearchEdit = document.getElementById('editSupplierSearch');
     const invoiceRow = document.getElementById('editInvoiceRow');
 
     document.addEventListener('click', function(e){
@@ -709,6 +777,8 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       fMethod.value = dataset.method || '';
       fDate.value = dataset.date || '';
       fDesc.value = dataset.desc || '';
+      fSupplier.value = dataset.supplierId || '';
+      supplierRow.style.display = (fType.value === 'expense') ? '' : 'none';
       invoiceRow.style.display = (fType.value === 'payment') ? '' : 'none';
       bsModal.show();
     });
@@ -716,6 +786,13 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     // toggle invoice row when type changes inside modal
     fType.addEventListener('change', function(){
       invoiceRow.style.display = (this.value === 'payment') ? '' : 'none';
+      supplierRow.style.display = (this.value === 'expense') ? '' : 'none';
+    });
+    supplierSearchEdit.addEventListener('input', function() {
+      const term = this.value.trim().toLowerCase();
+      Array.from(fSupplier.options).forEach(function(option) {
+        if (option.value) option.hidden = !option.dataset.search.includes(term);
+      });
     });
   })();
 

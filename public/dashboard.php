@@ -490,6 +490,24 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
           </ul>
         </div>
         <?php endif; ?>
+        <?php if ($hasSuppliers && !empty($supplierStats['recent_payments'])): ?>
+        <div class="card p-3 mb-3">
+          <h6 class="mb-3">Recent Supplier Payments</h6>
+          <ul class="list-unstyled mb-0 small">
+            <?php foreach($supplierStats['recent_payments'] as $payment): ?>
+              <li class="mb-2">
+                <div class="d-flex justify-content-between">
+                  <span><?= htmlspecialchars($payment['business_name']) ?></span>
+                  <span class="fw-bold"><?= fmtCurrency((float)$payment['amount']) ?></span>
+                </div>
+                <div class="text-muted"><?= htmlspecialchars($payment['payment_number']) ?> â€¢ <?= htmlspecialchars($payment['payment_date']) ?>
+                  <a class="link-light ms-1" href="supplier_payment_receipt.php?id=<?= (int)$payment['id'] ?>">Receipt</a>
+                </div>
+              </li>
+            <?php endforeach; ?>
+          </ul>
+        </div>
+        <?php endif; ?>
 
         <div class="card p-3">
           <h6 class="mb-2">Weekly Trend</h6>

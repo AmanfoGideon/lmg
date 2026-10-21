@@ -8,17 +8,18 @@ require_once "../includes/suppliers.php";
 if (isset($_GET['get_bills']) && isset($_GET['supplier_id'])) {
   header('Content-Type: application/json');
   $supplier_id = (int)$_GET['supplier_id'];
-  $bills = supplier_bill_list($conn, $supplier_id, 'unpaid', '', 100, 0);
+  $bills = supplier_bill_list($conn, $supplier_id, '', '', 100, 0);
   $outstanding_bills = [];
   foreach ($bills as $bill) {
     $allocations = supplier_bill_get_allocations($conn, (int)$bill['id']);
-    $paid = array_sum(array_column($allocations, 'amount'));
-    $balance = (float)$bill['total'] - $paid;
-    if ($balance > 0) {
+    $paidCents = array_sum(array_map(static fn($allocation) => supplier_amount_cents($allocation['amount']), $allocations));
+    $balanceCents = supplier_amount_cents($bill['total']) - $paidCents;
+    $balance = $balanceCents / 100;
+      if ($bill['status'] !== 'cancelled' && $balance > 0) {
       $outstanding_bills[] = [
         'id' => (int)$bill['id'],
         'bill_number' => $bill['bill_number'],
-        'total' => (float)$bill['total'],
+        'total' => supplier_cents_decimal(supplier_amount_cents($bill['total'])),
         'balance' => $balance
       ];
     }
@@ -90,7 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       try {
         $payment_id = (int)($_POST['payment_id'] ?? 0);
         $bill_id = (int)($_POST['bill_id'] ?? 0);
-        $amount = (float)($_POST['allocation_amount'] ?? 0);
+        $amount = (string)($_POST['allocation_amount'] ?? '0');
         supplier_payment_allocate($conn, $payment_id, $bill_id, $amount);
         $message = 'Payment allocated successfully';
       } catch (InvalidArgumentException $e) {
@@ -103,8 +104,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       try {
         $payment_id = (int)($_POST['payment_id'] ?? 0);
         $bill_id = (int)($_POST['bill_id'] ?? 0);
-        supplier_payment_remove_allocation($conn, $payment_id, $bill_id);
-        $message = 'Allocation removed successfully';
+        $reason = trim((string)($_POST['reversal_reason'] ?? ''));
+        supplier_payment_remove_allocation($conn, $payment_id, $bill_id, $reason);
+        $message = 'Allocation reversal recorded';
       } catch (InvalidArgumentException $e) {
         $message = $e->getMessage();
       } catch (Throwable $e) {
@@ -231,6 +233,7 @@ $role = $_SESSION['role'] ?? 'staff';
                 <option value="">All Status</option>
                 <option value="unallocated" <?= $status_filter === 'unallocated' ? 'selected' : '' ?>>Unallocated</option>
                 <option value="allocated" <?= $status_filter === 'allocated' ? 'selected' : '' ?>>Allocated</option>
+                <option value="partially_allocated" <?= $status_filter === 'partially_allocated' ? 'selected' : '' ?>>Partially allocated</option>
                 <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
               </select>
               <input class="form-control form-control-sm" type="text" name="search" placeholder="Search..." value="<?= htmlspecialchars($search) ?>">
@@ -259,8 +262,10 @@ $role = $_SESSION['role'] ?? 'staff';
                   <?php foreach($payments as $payment): ?>
                     <?php 
                       $allocations = supplier_payment_get_allocations($conn, (int)$payment['id']);
-                      $allocated = array_sum(array_column($allocations, 'amount'));
-                      $balance = (float)$payment['amount'] - $allocated;
+                      $allocatedCents = array_sum(array_map(static fn($allocation) => $allocation['reversed_at'] === null ? supplier_amount_cents($allocation['amount']) : 0, $allocations));
+                      $balanceCents = supplier_amount_cents($payment['amount']) - $allocatedCents;
+                      $allocated = $allocatedCents / 100;
+                      $balance = $balanceCents / 100;
                     ?>
                     <tr>
                       <td><?= htmlspecialchars($payment['payment_number']) ?></td>
@@ -271,11 +276,12 @@ $role = $_SESSION['role'] ?? 'staff';
                       <td class="<?= $balance > 0 ? 'text-warning' : '' ?>"><?= fmtCurrency($balance) ?></td>
                       <td><?= htmlspecialchars($payment['payment_method']) ?></td>
                       <td>
-                        <span class="badge bg-<?= $payment['status'] === 'allocated' ? 'success' : ($payment['status'] === 'cancelled' ? 'secondary' : 'warning text-dark') ?>">
+                        <span class="badge bg-<?= $payment['status'] === 'allocated' ? 'success' : ($payment['status'] === 'cancelled' ? 'secondary' : ($payment['status'] === 'partially_allocated' ? 'info text-dark' : 'warning text-dark')) ?>">
                           <?= htmlspecialchars($payment['status']) ?>
                         </span>
                       </td>
                       <td class="d-flex gap-2">
+                        <a class="btn btn-sm btn-outline-info" href="supplier_payment_receipt.php?id=<?= (int)$payment['id'] ?>" title="View payment receipt">Receipt</a>
                         <?php if ($payment['status'] !== 'cancelled'): ?>
                           <button type="button" class="btn btn-sm btn-outline-light btn-edit" 
                             data-id="<?= (int)$payment['id'] ?>"
@@ -305,6 +311,24 @@ $role = $_SESSION['role'] ?? 'staff';
                         <?php endif; ?>
                       </td>
                     </tr>
+                    <?php foreach ($allocations as $allocation): ?>
+                      <tr class="small">
+                        <td colspan="3" class="text-muted">↳ <?= htmlspecialchars($allocation['payment_number'] ?? '') ?> → <?= htmlspecialchars($allocation['bill_number'] ?? '') ?></td>
+                          <td colspan="2"><?= fmtCurrency(supplier_amount_cents($allocation['amount']) / 100) ?></td>
+                        <td colspan="2"><?= $allocation['reversed_at'] === null ? 'Allocated' : 'Reversed: ' . htmlspecialchars($allocation['reversal_reason'] ?? '') ?></td>
+                        <td colspan="2">
+                          <?php if ($allocation['reversed_at'] === null && $payment['status'] !== 'cancelled'): ?>
+                            <form method="POST" class="d-flex gap-1 align-items-center">
+                              <?= csrf_input() ?><input type="hidden" name="action" value="remove_allocation">
+                              <input type="hidden" name="payment_id" value="<?= (int)$payment['id'] ?>">
+                              <input type="hidden" name="bill_id" value="<?= (int)$allocation['bill_id'] ?>">
+                              <input class="form-control form-control-sm" name="reversal_reason" required maxlength="500" placeholder="Reason for reversal">
+                              <button class="btn btn-sm btn-outline-warning" type="submit">Reverse</button>
+                            </form>
+                          <?php endif; ?>
+                        </td>
+                      </tr>
+                    <?php endforeach; ?>
                   <?php endforeach; ?>
                 <?php endif; ?>
               </tbody>
@@ -416,12 +440,14 @@ document.addEventListener('DOMContentLoaded', function() {
       }
       const form = document.createElement('form');
       form.method = 'POST';
-      form.innerHTML = `
-        <?= csrf_input() ?>
-        <input type="hidden" name="action" value="cancel">
-        <input type="hidden" name="payment_id" value="${this.dataset.id}">
-        <input type="hidden" name="cancellation_reason" value="${reason.trim()}">
-      `;
+      const csrf = document.querySelector('input[name="_csrf"]');
+      [["_csrf", csrf ? csrf.value : ""], ["action", "cancel"], ["payment_id", this.dataset.id], ["cancellation_reason", reason.trim()]].forEach(function(pair) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = pair[0];
+        input.value = pair[1];
+        form.appendChild(input);
+      });
       document.body.appendChild(form);
       form.submit();
     });
@@ -447,9 +473,9 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => response.json())
         .then(bills => {
           const select = document.getElementById('allocate_bill_id');
-          select.innerHTML = '<option value="">Select Outstanding Bill</option>';
+          select.replaceChildren(new Option('Select Outstanding Bill', ''));
           bills.forEach(bill => {
-            select.innerHTML += `<option value="${bill.id}">${bill.bill_number} - ${bill.total} (Balance: ${bill.balance})</option>`;
+            select.add(new Option(`${bill.bill_number} - ${bill.total} (Balance: ${bill.balance})`, bill.id));
           });
         });
       

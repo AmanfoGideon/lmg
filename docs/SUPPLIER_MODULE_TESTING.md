@@ -8,13 +8,13 @@ Before testing, ensure the database migrations have been applied:
 ```sql
 -- In MySQL console or PHPMyAdmin
 source D:\wamp64\www\CRM\business-management-system\migrations\20261021_suppliers.sql;
+source D:\wamp64\www\CRM\business-management-system\migrations\20261021_supplier_reversals.sql;
 ```
 
 ### Supabase Migration:
 Since Supabase CLI is not available in the environment:
-1. Copy the SQL from `supabase/migrations/202610210003_suppliers.sql`
-2. Run it in Supabase SQL Editor
-3. Or use the Supabase dashboard to apply the migration
+1. Apply `supabase/migrations/202610210003_suppliers.sql`
+2. Then apply `supabase/migrations/202610210004_supplier_reversals.sql`
 
 ## Test Scenarios
 
@@ -175,10 +175,10 @@ Since Supabase CLI is not available in the environment:
 - Attempt to cancel it
 - **Expected:** Error message: "Cannot cancel payment with allocations. Remove allocations first."
 
-**Test 3.10: Remove allocation**
+**Test 3.10: Reverse allocation with reason**
 - On an allocated payment, view allocations
-- Remove an allocation
-- **Expected:** Allocation removed, payment status may change, bill status recalculated
+- Enter a reason and reverse an allocation
+- **Expected:** Reversal is retained in the payment history, and payment/bill balances are recalculated
 
 ### 4. Expense Integration (public/transactions.php)
 

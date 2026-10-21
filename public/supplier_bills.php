@@ -229,8 +229,10 @@ $role = $_SESSION['role'] ?? 'staff';
                   <?php foreach($bills as $bill): ?>
                     <?php 
                       $allocations = supplier_bill_get_allocations($conn, (int)$bill['id']);
-                      $paid = array_sum(array_column($allocations, 'amount'));
-                      $balance = (float)$bill['total'] - $paid;
+                      $paidCents = array_sum(array_map(static fn($allocation) => supplier_amount_cents($allocation['amount']), $allocations));
+                      $balanceCents = supplier_amount_cents($bill['total']) - $paidCents;
+                      $paid = $paidCents / 100;
+                      $balance = $balanceCents / 100;
                     ?>
                     <tr>
                       <td><?= htmlspecialchars($bill['bill_number']) ?></td>
@@ -362,12 +364,14 @@ document.addEventListener('DOMContentLoaded', function() {
       }
       const form = document.createElement('form');
       form.method = 'POST';
-      form.innerHTML = `
-        <?= csrf_input() ?>
-        <input type="hidden" name="action" value="cancel">
-        <input type="hidden" name="bill_id" value="${this.dataset.id}">
-        <input type="hidden" name="cancellation_reason" value="${reason.trim()}">
-      `;
+      const csrf = document.querySelector('input[name="_csrf"]');
+      [["_csrf", csrf ? csrf.value : ""], ["action", "cancel"], ["bill_id", this.dataset.id], ["cancellation_reason", reason.trim()]].forEach(function(pair) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = pair[0];
+        input.value = pair[1];
+        form.appendChild(input);
+      });
       document.body.appendChild(form);
       form.submit();
     });

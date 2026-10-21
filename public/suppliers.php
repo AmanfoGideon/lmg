@@ -59,8 +59,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($supplier_id <= 0) throw new InvalidArgumentException('Invalid supplier ID.');
         
         // Check for financial history
-        $check = $conn->prepare("SELECT COUNT(*) as count FROM supplier_bills WHERE supplier_id=?");
-        $check->bind_param('i', $supplier_id);
+        $check = $conn->prepare("SELECT
+          (SELECT COUNT(*) FROM supplier_bills WHERE supplier_id=?) +
+          (SELECT COUNT(*) FROM supplier_payments WHERE supplier_id=?) +
+          (SELECT COUNT(*) FROM transactions WHERE supplier_id=?) AS count");
+        $check->bind_param('iii', $supplier_id, $supplier_id, $supplier_id);
         $check->execute();
         $bill_count = (int)$check->get_result()->fetch_assoc()['count'];
         $check->close();
@@ -222,6 +225,7 @@ $role = $_SESSION['role'] ?? 'staff';
                         </span>
                       </td>
                       <td class="d-flex gap-2">
+                        <a class="btn btn-sm btn-outline-info" href="supplier_statement.php?supplier_id=<?= (int)$supplier['id'] ?>" title="Supplier statement"><i class="bi bi-journal-text"></i></a>
                         <button type="button" class="btn btn-sm btn-outline-light btn-edit" 
                           data-id="<?= (int)$supplier['id'] ?>"
                           data-business_name="<?= htmlspecialchars($supplier['business_name'], ENT_QUOTES) ?>"
