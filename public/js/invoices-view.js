@@ -4,6 +4,7 @@
 // These credentials cannot be exposed to the frontend.
 import {
   createInvoice,
+  deleteInvoice,
   getInvoiceDetails,
   listClientsForForms,
   listInvoices,
@@ -57,6 +58,26 @@ function invoiceRow(invoice) {
   view.textContent = "View";
   view.addEventListener("click", () => showInvoice(invoice.id));
   actions.append(view);
+  const remove = document.createElement("button");
+  remove.className = "btn btn-sm btn-outline-danger";
+  remove.type = "button";
+  remove.textContent = "Delete";
+  remove.disabled = invoice.status !== "unpaid";
+  remove.title = remove.disabled ? "Invoices with recorded payments cannot be deleted." : "Delete invoice";
+  remove.addEventListener("click", async () => {
+    if (invoice.status !== "unpaid" || !window.confirm("Delete this invoice? This cannot be undone.")) return;
+    remove.disabled = true;
+    try {
+      await deleteInvoice(invoice.id);
+      document.getElementById("invoiceDetails").classList.add("d-none");
+      showNotice("Invoice deleted.");
+      await loadInvoices();
+    } catch (error) {
+      showNotice(error.message || "Unable to delete invoice.", "danger");
+      remove.disabled = false;
+    }
+  });
+  actions.append(remove);
   row.append(actions);
   return row;
 }

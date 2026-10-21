@@ -167,6 +167,13 @@ export async function recordInvoicePayment(payment) {
   }));
 }
 
+export async function deleteInvoice(invoiceId) {
+  if (!isOnline()) {
+    throw new Error("Invoice deletion requires an internet connection.");
+  }
+  return unwrap(await getSupabase().rpc("delete_invoice", { p_invoice_id: invoiceId }));
+}
+
 export async function importClients(rows) {
   return unwrap(await getSupabase().rpc("import_clients", { p_rows: rows }));
 }

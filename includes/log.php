@@ -91,6 +91,7 @@ function log_action(mysqli $conn, string $action, string $details = '', array $c
     'client_note' => ['client.note.created', 'clients', 'client', 'Client note created.'],
     'clients_import_csv' => ['client.import.completed', 'clients', 'client', 'Client import completed.'],
     'invoice_create' => ['invoice.created', 'invoices', 'invoice', 'Invoice created.'],
+    'invoice_delete' => ['invoice.deleted', 'invoices', 'invoice', 'Invoice deleted.'],
     'invoice_status' => ['invoice.status.updated', 'invoices', 'invoice', 'Invoice status updated.'],
     'invoice_payment' => ['invoice.payment.recorded', 'invoices', 'invoice', 'Invoice payment recorded.'],
     'user_create' => ['user.created', 'users', 'user', 'User created.'],

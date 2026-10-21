@@ -49,6 +49,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = 'Invoice could not be saved. Please try again.';
         error_log('Invoice creation failed: '.$e->getMessage());
       }
+    } elseif ($action === 'delete') {
+      try {
+        $invoiceId = filter_var($_POST['invoice_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if (!$invoiceId) throw new InvalidArgumentException('Select a valid invoice.');
+        $conn->begin_transaction();
+        $find = $conn->prepare('SELECT invoice_number, client_id, total FROM invoices WHERE id=? FOR UPDATE');
+        $find->bind_param('i', $invoiceId);
+        $find->execute();
+        $invoice = $find->get_result()->fetch_assoc();
+        $find->close();
+        if (!$invoice) throw new InvalidArgumentException('Invoice not found.');
+
+        $payment = $conn->prepare("SELECT id FROM transactions WHERE invoice_id=? AND type='payment' LIMIT 1");
+        $payment->bind_param('i', $invoiceId);
+        $payment->execute();
+        $hasPayments = (bool)$payment->get_result()->fetch_row();
+        $payment->close();
+        if ($hasPayments) throw new InvalidArgumentException('Invoices with recorded payments cannot be deleted.');
+
+        $delete = $conn->prepare('DELETE FROM invoices WHERE id=?');
+        $delete->bind_param('i', $invoiceId);
+        $delete->execute();
+        $delete->close();
+        log_action($conn, 'invoice_delete', (string)$invoice['invoice_number'], [
+          'entity_id'=>(string)$invoiceId,
+          'old_values'=>['invoice_number'=>$invoice['invoice_number'],'client_id'=>(int)$invoice['client_id'],'total'=>(string)$invoice['total'],'status'=>'unpaid']
+        ]);
+        $conn->commit();
+        $message = 'Invoice deleted';
+      } catch (InvalidArgumentException $e) {
+        try { $conn->rollback(); } catch (Throwable $ignored) {}
+        $message = $e->getMessage();
+      } catch (Throwable $e) {
+        try { $conn->rollback(); } catch (Throwable $ignored) {}
+        $message = 'Invoice could not be deleted. Please try again.';
+        error_log('Invoice deletion failed: '.$e->getMessage());
+      }
     } elseif ($action === 'update_status') {
       $message = 'Invoice status is calculated from recorded payments and cannot be changed manually.';
     }
@@ -146,6 +183,12 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                   </td>
                   <td class="d-flex gap-2 align-items-center">
                     <a class="btn btn-sm btn-outline-light" href="invoice_view.php?id=<?= (int)$i['id'] ?>">View</a>
+                    <form method="POST" class="d-inline-block" onsubmit="return confirm('Delete this invoice? This cannot be undone.');">
+                      <?= csrf_input() ?>
+                      <input type="hidden" name="action" value="delete">
+                      <input type="hidden" name="invoice_id" value="<?= (int)$i['id'] ?>">
+                      <button type="submit" class="btn btn-sm btn-outline-danger" <?= $i['status'] !== 'unpaid' ? 'disabled title="Invoices with recorded payments cannot be deleted."' : '' ?>>Delete</button>
+                    </form>
                   </td>
                 </tr>
                 <?php endwhile; ?>
