@@ -189,7 +189,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       </div>
     </div>
 
-    <div class="card p-3 mt-3">
+    <div class="card p-3 mt-3 report-table-card">
       <div class="d-flex justify-content-between align-items-center mb-2">
         <h6 class="mb-0">Summary</h6>
         <form method="POST" class="no-print">

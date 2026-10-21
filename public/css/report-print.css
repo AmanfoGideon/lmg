@@ -128,6 +128,12 @@
     break-inside: avoid;
   }
 
+  .report-printing .report-table-card,
+  .report-page .report-table-card {
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+  }
+
   .report-printing .stat-title,
   .report-printing .stat-value,
   .report-printing table,
