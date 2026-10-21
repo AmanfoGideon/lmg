@@ -1,0 +1,183 @@
+.report-print-heading,
+.report-print-period {
+  display: none;
+}
+
+@media print {
+  html,
+  body {
+    width: auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #111 !important;
+    -webkit-print-color-adjust: economy;
+    print-color-adjust: economy;
+  }
+
+  .report-page .sidebar,
+  .report-page .report-controls,
+  .report-page .no-print,
+  .report-page footer,
+  .report-page .dataTables_length,
+  .report-page .dataTables_filter,
+  .report-page .dataTables_info,
+  .report-page .dataTables_paginate {
+    display: none !important;
+  }
+
+  .report-page .app-shell,
+  .report-page .main {
+    display: block !important;
+    width: auto !important;
+    min-height: 0 !important;
+    height: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .report-page header > div:last-child {
+    display: none !important;
+  }
+
+  .report-page header,
+  .report-page header h2,
+  .report-page header small {
+    color: #111 !important;
+  }
+
+  .report-page .report-print-period {
+    display: block;
+    margin: 0 0 12pt;
+    color: #333 !important;
+  }
+
+  .report-printing .loading-screen,
+  .report-printing .nav-overlay,
+  .report-printing .sidebar,
+  .report-printing .main > header,
+  .report-printing .main > #notice,
+  .report-printing .main > #fatalNotice,
+  .report-printing .main > .app-view:not(#view-reports),
+  .report-printing #view-reports > .report-controls,
+  .report-printing #reportPrintStatus {
+    display: none !important;
+  }
+
+  .report-printing .app-shell,
+  .report-printing .main {
+    display: block !important;
+    width: auto !important;
+    min-height: 0 !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    opacity: 1 !important;
+    background: #fff !important;
+  }
+
+  .report-printing #view-reports,
+  .report-printing #reportPrintArea {
+    display: block !important;
+    width: auto !important;
+    height: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    animation: none !important;
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  .report-printing #view-reports.d-none {
+    display: block !important;
+  }
+
+  .report-print-heading {
+    display: block;
+    margin: 0 0 14pt;
+    color: #111 !important;
+  }
+
+  .report-print-heading h1 {
+    margin: 0 0 4pt;
+    font-size: 20pt;
+    color: #111 !important;
+  }
+
+  .report-print-heading p {
+    margin: 0;
+    color: #333 !important;
+  }
+
+  .report-printing .card,
+  .report-printing .stat-card,
+  .report-page .card,
+  .report-page .stat-card {
+    color: #111 !important;
+    background: #fff !important;
+    border: 1px solid #aaa !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+
+  .report-printing .stat-title,
+  .report-printing .stat-value,
+  .report-printing table,
+  .report-printing th,
+  .report-printing td,
+  .report-page .stat-title,
+  .report-page .stat-value,
+  .report-page table,
+  .report-page th,
+  .report-page td {
+    color: #111 !important;
+  }
+
+  .report-printing .table-responsive,
+  .report-page .table-responsive,
+  .report-printing .dataTables_wrapper,
+  .report-page .dataTables_wrapper {
+    width: 100% !important;
+    max-width: none !important;
+    overflow: visible !important;
+  }
+
+  .report-printing table,
+  .report-page table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  .report-printing thead,
+  .report-page thead {
+    display: table-header-group;
+  }
+
+  .report-printing tr,
+  .report-page tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .report-printing th,
+  .report-printing td,
+  .report-page th,
+  .report-page td {
+    border: 1px solid #aaa !important;
+    padding: 5pt !important;
+    background: #fff !important;
+  }
+
+  .report-printing .row,
+  .report-page .row {
+    break-inside: avoid;
+  }
+}

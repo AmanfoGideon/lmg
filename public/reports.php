@@ -4,6 +4,7 @@ require_once "../includes/db.php";
 require_once "../includes/log.php";
 
 $message = '';
+$reportError = '';
 $group = $_GET['group'] ?? 'daily';
 $start = $_GET['start'] ?? date('Y-m-01');
 $end = $_GET['end'] ?? date('Y-m-t');
@@ -55,19 +56,24 @@ if (isset($_POST['action']) && $_POST['action']==='export_csv') {
 }
 
 $rows = [];
-$sql = "SELECT type, amount, date FROM transactions WHERE date BETWEEN ? AND ?".($hasBranch && $branch!=='' ? " AND branch=?" : "")." ORDER BY date ASC";
-$stmt = $conn->prepare($sql);
-if ($hasBranch && $branch!=='') { $stmt->bind_param('sss', $start, $end, $branch); } else { $stmt->bind_param('ss', $start, $end); }
-$stmt->execute();
-$res = $stmt->get_result();
-while($r = $res->fetch_assoc()) {
-  $key = $r['date'];
-  if ($group==='weekly') $key = date('o-\WW', strtotime($r['date']));
-  if ($group==='monthly') $key = date('Y-m', strtotime($r['date']));
-  if (!isset($rows[$key])) $rows[$key] = ['income'=>0,'expense'=>0,'count'=>0];
-  if ($r['type']==='income' || $r['type']==='payment') $rows[$key]['income'] += (float)$r['amount'];
-  if ($r['type']==='expense') $rows[$key]['expense'] += (float)$r['amount'];
-  $rows[$key]['count']++;
+try {
+  $sql = "SELECT type, amount, date FROM transactions WHERE date BETWEEN ? AND ?".($hasBranch && $branch!=='' ? " AND branch=?" : "")." ORDER BY date ASC";
+  $stmt = $conn->prepare($sql);
+  if ($hasBranch && $branch!=='') { $stmt->bind_param('sss', $start, $end, $branch); } else { $stmt->bind_param('ss', $start, $end); }
+  $stmt->execute();
+  $res = $stmt->get_result();
+  while($r = $res->fetch_assoc()) {
+    $key = $r['date'];
+    if ($group==='weekly') $key = date('o-\WW', strtotime($r['date']));
+    if ($group==='monthly') $key = date('Y-m', strtotime($r['date']));
+    if (!isset($rows[$key])) $rows[$key] = ['income'=>0,'expense'=>0,'count'=>0];
+    if ($r['type']==='income' || $r['type']==='payment') $rows[$key]['income'] += (float)$r['amount'];
+    if ($r['type']==='expense') $rows[$key]['expense'] += (float)$r['amount'];
+    $rows[$key]['count']++;
+  }
+} catch (Throwable $error) {
+  error_log('Financial report query failed: '.$error->getMessage());
+  $reportError = 'Report data could not be loaded. Please try again later.';
 }
 $sorted = array_keys($rows);
 sort($sorted);
@@ -105,19 +111,20 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
   <link rel="stylesheet" href="css/dashboard.css">
+  <link rel="stylesheet" href="css/report-print.css">
   <link rel="icon" href="../favicon/favicon.ico" sizes="any">
   <link rel="icon" type="image/svg+xml" href="../favicon/favicon.svg">
   <link rel="icon" type="image/png" sizes="96x96" href="../favicon/favicon-96x96.png">
   <link rel="apple-touch-icon" sizes="180x180" href="../favicon/apple-touch-icon.png">
 </head>
-<body>
+<body class="report-page">
 <div class="app-shell d-flex">
   <?php $active_page='dashboard'; include "../includes/layout/sidebar.php"; ?>
 
   <main class="main flex-grow-1 p-4">
-    <?php $page_title='Financial Reports'; $page_subtitle='Daily, weekly or monthly summaries'; $header_actions='<button class="btn btn-outline-light me-2" onclick="window.print()"><i class="bi bi-printer"></i> Print</button>'; include "../includes/layout/header.php"; ?>
+    <?php $page_title='Financial Reports'; $page_subtitle='Daily, weekly or monthly summaries'; $header_actions='<button class="btn btn-outline-light me-2 no-print" type="button" onclick="window.print()"'.($reportError !== '' ? ' disabled' : '').'><i class="bi bi-printer"></i> Print</button>'; include "../includes/layout/header.php"; ?>
 
-    <div class="card p-3 mb-3">
+    <div class="card p-3 mb-3 report-controls">
       <form method="GET" class="row g-2">
         <div class="col-md-3">
           <label class="form-label">Group</label>
@@ -152,6 +159,9 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       </form>
     </div>
 
+    <?php if ($reportError !== ''): ?><div class="alert alert-danger report-controls" role="alert"><?= htmlspecialchars($reportError) ?></div><?php endif; ?>
+    <div id="reportPrintArea" class="report-print-area">
+    <p class="report-print-period"><?= htmlspecialchars(ucfirst($group).' report · '.$start.' to '.$end.($branch !== '' ? ' · '.$branch : ' · All branches')) ?></p>
     <div class="row g-3">
       <div class="col-lg-3 col-sm-6">
         <div class="stat-card p-3">
@@ -182,7 +192,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     <div class="card p-3 mt-3">
       <div class="d-flex justify-content-between align-items-center mb-2">
         <h6 class="mb-0">Summary</h6>
-        <form method="POST">
+        <form method="POST" class="no-print">
           <input type="hidden" name="action" value="export_csv">
           <input type="hidden" name="group" value="<?= htmlspecialchars($group) ?>">
           <input type="hidden" name="start" value="<?= htmlspecialchars($start) ?>">
@@ -202,6 +212,9 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
             </tr>
           </thead>
           <tbody>
+            <?php if (!$sorted): ?>
+              <tr><td colspan="5" class="text-muted"><?= $reportError !== '' ? 'Report data is unavailable.' : 'No transactions in the selected period.' ?></td></tr>
+            <?php endif; ?>
             <?php foreach($sorted as $period): ?>
               <?php $vals = $rows[$period]; $profit = $vals['income'] - $vals['expense']; ?>
               <tr>
@@ -216,11 +229,29 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
         </table>
       </div>
     </div>
+    </div>
 
     <footer class="mt-4 text-center text-muted small">© <?= date('Y') ?> LMG Creative Media</footer>
   </main>
 </div>
 <script>
+  let reportTableBeforePrint = null;
+  window.addEventListener('beforeprint', function(){
+    const table = document.querySelector('table.datatable');
+    if (!table || !jQuery.fn.DataTable.isDataTable(table)) return;
+    const api = jQuery(table).DataTable();
+    reportTableBeforePrint = { length: api.page.len(), page: api.page() };
+    api.page.len(-1).draw();
+  });
+  window.addEventListener('afterprint', function(){
+    const table = document.querySelector('table.datatable');
+    if (!reportTableBeforePrint || !table || !jQuery.fn.DataTable.isDataTable(table)) return;
+    const api = jQuery(table).DataTable();
+    const previous = reportTableBeforePrint;
+    reportTableBeforePrint = null;
+    api.page.len(previous.length).draw(false);
+    if (previous.length !== -1) api.page(previous.page).draw('page');
+  });
   jQuery(function($){
     $('table.datatable').each(function(){
       const el = this;
