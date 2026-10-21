@@ -192,16 +192,12 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                   </td>
                   <td class="d-flex gap-2 align-items-center">
                     <a class="btn btn-sm btn-outline-light" href="invoice_view.php?id=<?= (int)$i['id'] ?>">View</a>
-                    <?php if ($i['status'] === 'unpaid'): ?>
-                      <a class="btn btn-sm btn-outline-light" href="invoice_edit.php?id=<?= (int)$i['id'] ?>">Edit</a>
-                    <?php else: ?>
-                      <button type="button" class="btn btn-sm btn-outline-light" disabled title="Invoices with recorded payments cannot be edited.">Edit</button>
-                    <?php endif; ?>
-                    <form method="POST" class="d-inline-block" onsubmit="return confirm('Delete this invoice? This cannot be undone.');">
+                    <a class="btn btn-sm btn-outline-light" href="invoice_edit.php?id=<?= (int)$i['id'] ?>">Edit</a>
+                    <form method="POST" class="d-inline-block" data-confirm="<?= htmlspecialchars('Delete invoice '.$i['invoice_number'].' for '.$i['client'].'? This cannot be undone.', ENT_QUOTES, 'UTF-8') ?>" onsubmit="return confirm(this.dataset.confirm);">
                       <?= csrf_input() ?>
                       <input type="hidden" name="action" value="delete">
                       <input type="hidden" name="invoice_id" value="<?= (int)$i['id'] ?>">
-                      <button type="submit" class="btn btn-sm btn-outline-danger" <?= $i['status'] !== 'unpaid' ? 'disabled title="Invoices with recorded payments cannot be deleted."' : '' ?>>Delete</button>
+                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete invoice">Delete</button>
                     </form>
                   </td>
                 </tr>

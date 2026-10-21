@@ -64,19 +64,27 @@ function invoiceRow(invoice) {
   edit.className = "btn btn-sm btn-outline-light";
   edit.type = "button";
   edit.textContent = "Edit";
-  edit.disabled = invoice.status !== "unpaid";
-  edit.title = edit.disabled ? "Invoices with recorded payments cannot be edited." : "Edit invoice";
-  edit.addEventListener("click", () => startInvoiceEdit(invoice.id));
+  edit.title = "Edit invoice";
+  edit.addEventListener("click", () => {
+    if (invoice.status !== "unpaid") {
+      showNotice("Invoices with recorded payments cannot be edited. Their payment history and balance are preserved.", "warning");
+      return;
+    }
+    startInvoiceEdit(invoice.id);
+  });
   actions.append(edit);
   const remove = document.createElement("button");
   remove.className = "btn btn-sm btn-outline-danger";
   remove.type = "button";
   remove.textContent = "Delete";
-  remove.disabled = invoice.status !== "unpaid";
-  remove.title = remove.disabled ? "Invoices with recorded payments cannot be deleted." : "Delete invoice";
+  remove.title = "Delete invoice";
   remove.addEventListener("click", async () => {
     const clientName = invoice.clients?.full_name || "this client";
-    if (invoice.status !== "unpaid" || !window.confirm(`Delete invoice ${invoice.invoice_number} for ${clientName}? This cannot be undone.`)) return;
+    if (invoice.status !== "unpaid") {
+      showNotice("Invoices with recorded payments cannot be deleted. Their payment history and balance are preserved.", "warning");
+      return;
+    }
+    if (!window.confirm(`Delete invoice ${invoice.invoice_number} for ${clientName}? This cannot be undone.`)) return;
     remove.disabled = true;
     try {
       await deleteInvoice(invoice.id);
