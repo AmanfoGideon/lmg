@@ -66,10 +66,6 @@ function invoiceRow(invoice) {
   edit.textContent = "Edit";
   edit.title = "Edit invoice";
   edit.addEventListener("click", () => {
-    if (invoice.status !== "unpaid") {
-      showNotice("Invoices with recorded payments cannot be edited. Their payment history and balance are preserved.", "warning");
-      return;
-    }
     startInvoiceEdit(invoice.id);
   });
   actions.append(edit);
@@ -80,11 +76,8 @@ function invoiceRow(invoice) {
   remove.title = "Delete invoice";
   remove.addEventListener("click", async () => {
     const clientName = invoice.clients?.full_name || "this client";
-    if (invoice.status !== "unpaid") {
-      showNotice("Invoices with recorded payments cannot be deleted. Their payment history and balance are preserved.", "warning");
-      return;
-    }
-    if (!window.confirm(`Delete invoice ${invoice.invoice_number} for ${clientName}? This cannot be undone.`)) return;
+    const statusWarning = invoice.status !== "unpaid" ? ` This ${invoice.status} invoice has recorded payments that will also be deleted.` : "";
+    if (!window.confirm(`Delete invoice ${invoice.invoice_number} for ${clientName}?${statusWarning} This cannot be undone.`)) return;
     remove.disabled = true;
     try {
       await deleteInvoice(invoice.id);
@@ -104,7 +97,6 @@ function invoiceRow(invoice) {
 async function startInvoiceEdit(id) {
   try {
     const invoice = await getInvoiceDetails(id);
-    if (invoice.status !== "unpaid") throw new Error("Invoices with recorded payments cannot be edited.");
     editingInvoiceId = invoice.id;
     const form = document.getElementById("invoiceForm");
     form.classList.remove("d-none");

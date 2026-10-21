@@ -142,7 +142,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payment_method ENUM('cash','mo
 -- Link payments to invoices
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS invoice_id INT NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_invoice ON transactions(invoice_id);
-ALTER TABLE transactions ADD CONSTRAINT IF NOT EXISTS fk_transactions_invoice FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
+ALTER TABLE transactions ADD CONSTRAINT IF NOT EXISTS fk_transactions_invoice FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE;
 
 -- =======================================
 -- 9) Client Interactions (CRM notes)

@@ -30,20 +30,6 @@ BEGIN
     RAISE EXCEPTION 'Invoice not found' USING ERRCODE = '22023';
   END IF;
 
-  IF EXISTS (
-    SELECT 1 FROM public.transactions
-    WHERE invoice_id = p_invoice_id AND type = 'payment'
-  ) THEN
-    RAISE EXCEPTION 'Invoices with recorded payments cannot be deleted' USING ERRCODE = '23514';
-  END IF;
-  IF EXISTS (
-    SELECT 1 FROM public.invoice_items ii
-    WHERE ii.invoice_id = p_invoice_id
-      AND EXISTS (SELECT 1 FROM public.products p WHERE lower(p.name)=lower(ii.item_name))
-  ) THEN
-    RAISE EXCEPTION 'Invoices with inventory-linked items cannot be deleted until stock is reconciled' USING ERRCODE = '23514';
-  END IF;
-
   DELETE FROM public.invoices WHERE id = p_invoice_id;
   INSERT INTO public.user_logs (user_id, action, details)
   VALUES (auth.uid(), 'invoice_delete', v_invoice.invoice_number);
@@ -75,9 +61,6 @@ DECLARE
   v_quantity integer;
   v_price numeric(10,2);
   v_subtotal numeric(10,2) := 0;
-  v_old_inventory jsonb;
-  v_new_inventory jsonb;
-  v_has_stock_link boolean;
 BEGIN
   IF NOT public.is_active_member() THEN
     RAISE EXCEPTION 'An active authenticated account is required' USING ERRCODE = '42501';
@@ -95,9 +78,6 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Invoice not found' USING ERRCODE = '22023';
   END IF;
-  IF EXISTS (SELECT 1 FROM public.transactions WHERE invoice_id=p_invoice_id AND type='payment') THEN
-    RAISE EXCEPTION 'Invoices with recorded payments cannot be edited' USING ERRCODE = '23514';
-  END IF;
   IF NOT EXISTS (SELECT 1 FROM public.clients WHERE id=p_client_id) THEN
     RAISE EXCEPTION 'Client not found' USING ERRCODE = '22023';
   END IF;
@@ -113,27 +93,6 @@ BEGIN
     END IF;
     v_subtotal := v_subtotal + (v_quantity * v_price);
   END LOOP;
-
-  SELECT EXISTS (
-    SELECT 1 FROM public.invoice_items ii
-    WHERE ii.invoice_id=p_invoice_id
-      AND EXISTS (SELECT 1 FROM public.products p WHERE lower(p.name)=lower(ii.item_name))
-  ) OR EXISTS (
-    SELECT 1 FROM jsonb_array_elements(p_items) v
-    WHERE EXISTS (SELECT 1 FROM public.products p WHERE lower(p.name)=lower(v.value ->> 'name'))
-  ) INTO v_has_stock_link;
-  SELECT coalesce(jsonb_agg(jsonb_build_array(lower(ii.item_name), ii.quantity)
-      ORDER BY lower(ii.item_name), ii.quantity), '[]'::jsonb)
-  INTO v_old_inventory
-  FROM public.invoice_items ii
-  WHERE ii.invoice_id=p_invoice_id;
-  SELECT coalesce(jsonb_agg(jsonb_build_array(lower(v.value ->> 'name'), (v.value ->> 'qty')::integer)
-      ORDER BY lower(v.value ->> 'name'), (v.value ->> 'qty')::integer), '[]'::jsonb)
-  INTO v_new_inventory
-  FROM jsonb_array_elements(p_items) v;
-  IF v_has_stock_link AND v_old_inventory IS DISTINCT FROM v_new_inventory THEN
-    RAISE EXCEPTION 'Line items cannot be changed on invoices linked to inventory' USING ERRCODE = '23514';
-  END IF;
 
   UPDATE public.invoices
   SET client_id=p_client_id, invoice_date=p_invoice_date, due_date=p_due_date,
