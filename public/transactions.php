@@ -3,6 +3,7 @@ require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
 require_once "../includes/log.php";
 require_once "../includes/invoice.php";
+require_once "../includes/suppliers.php";
 
 $message = '';
 $transactionRequestKey = bin2hex(random_bytes(16));
@@ -58,15 +59,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       }
     } elseif ($client_id > 0) {
       if ($payment_method && !in_array($payment_method, ['cash','mobile','card'])) { $payment_method = null; }
+      $supplier_id = (int)($_POST['supplier_id'] ?? 0);
       $conn->begin_transaction();
-      $stmt = $conn->prepare("INSERT INTO transactions (client_id, amount, type, payment_method, description, date) VALUES (?,?,?,?,?,?)");
-      $stmt->bind_param('idssss', $client_id, $amount, $type, $payment_method, $description, $date);
+      $stmt = $conn->prepare("INSERT INTO transactions (client_id, supplier_id, amount, type, payment_method, description, date) VALUES (?,?,?,?,?,?,?)");
+      $stmt->bind_param('iidssss', $client_id, $supplier_id, $amount, $type, $payment_method, $description, $date);
       $message = $stmt->execute() ? 'Transaction added' : 'Error adding transaction';
       if ($message === 'Transaction added') {
         log_action($conn, 'transaction_create', (string)$client_id.'|'.$type.'|'.$amount, [
           'action' => 'transaction.'.($type === 'income' ? 'income' : ($type === 'expense' ? 'expense' : $type)).'.created',
           'entity_id' => (string)$stmt->insert_id,
-          'new_values' => ['client_id'=>$client_id,'amount'=>$amount,'type'=>$type,'payment_method'=>$payment_method,'description'=>$description,'date'=>$date]
+          'new_values' => ['client_id'=>$client_id,'supplier_id'=>$supplier_id,'amount'=>$amount,'type'=>$type,'payment_method'=>$payment_method,'description'=>$description,'date'=>$date]
         ]);
         $conn->commit();
       } else {
@@ -76,6 +78,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
       $message = 'Specify a client by name';
     }
+    } elseif ($action === 'create_supplier') {
+      try {
+        $supplier = [
+          'business_name' => $_POST['business_name'] ?? '',
+          'contact_person' => $_POST['contact_person'] ?? '',
+          'phone' => $_POST['phone'] ?? '',
+          'email' => $_POST['email'] ?? '',
+          'address' => $_POST['address'] ?? '',
+          'category' => $_POST['category'] ?? '',
+          'tax_id' => $_POST['tax_id'] ?? '',
+          'notes' => $_POST['notes'] ?? '',
+          'status' => 'active'
+        ];
+        $supplier_id = supplier_create($conn, $supplier);
+        $message = 'Supplier created successfully';
+      } catch (InvalidArgumentException $e) {
+        $message = $e->getMessage();
+      } catch (Throwable $e) {
+        $message = 'Supplier could not be created. Please try again.';
+        error_log('Supplier creation failed: ' . $e->getMessage());
+      }
     } elseif ($action === 'delete') {
       $txId = (int)($_POST['id'] ?? 0);
       if ($txId > 0) {
@@ -183,6 +206,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $clients = $conn->query("SELECT id, full_name FROM clients ORDER BY full_name ASC");
 $clientsArr = [];
 while ($cRow = $clients->fetch_assoc()) { $clientsArr[] = $cRow; }
+
+$suppliers = $conn->query("SELECT id, business_name FROM suppliers WHERE status='active' ORDER BY business_name ASC");
+$suppliersArr = [];
+while ($sRow = $suppliers->fetch_assoc()) { $suppliersArr[] = $sRow; }
 $txLimit = (isset($_GET['format']) && $_GET['format'] === 'json') ? ' LIMIT 100' : '';
 $tx = $conn->query("SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, t.invoice_id, c.full_name AS client, i.invoice_number
                     FROM transactions t
@@ -262,9 +289,21 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
               </datalist>
               <input type="hidden" name="client_id" id="clientIdTx">
             </div>
+            <div class="col-12">
+              <label class="form-label">Supplier (Optional)</label>
+              <div class="input-group">
+                <select class="form-select" name="supplier_id" id="supplierIdTx">
+                  <option value="">No Supplier</option>
+                  <?php foreach($suppliersArr as $s): ?>
+                    <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['business_name']) ?></option>
+                  <?php endforeach; ?>
+                </select>
+                <button type="button" class="btn btn-outline-light" id="addSupplierBtn" title="Add New Supplier">+</button>
+              </div>
+            </div>
             <div class="col-6"><input class="form-control" type="number" step="0.01" name="amount" placeholder="Amount" required></div>
             <div class="col-6">
-              <select class="form-select" name="type">
+              <select class="form-select" name="type" id="typeSelect">
                 <option value="income">Income</option>
                 <option value="expense">Expense</option>
                 <option value="invoice">Invoice</option>
@@ -369,6 +408,64 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
 
     <footer class="mt-4 text-center text-muted small">© <?= date('Y') ?> LMG Creative Media</footer>
   </main>
+</div>
+
+<!-- Add Supplier Modal -->
+<div class="modal fade" id="addSupplierModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form method="POST" id="addSupplierForm">
+        <?= csrf_input() ?>
+        <input type="hidden" name="action" value="create_supplier">
+        <div class="modal-header">
+          <h5 class="modal-title">Add New Supplier</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-2">
+            <label class="form-label">Business Name *</label>
+            <input class="form-control" name="business_name" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Contact Person</label>
+            <input class="form-control" name="contact_person">
+          </div>
+          <div class="row g-2 mb-2">
+            <div class="col-6">
+              <label class="form-label">Phone</label>
+              <input class="form-control" name="phone">
+            </div>
+            <div class="col-6">
+              <label class="form-label">Email</label>
+              <input class="form-control" type="email" name="email">
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Address</label>
+            <textarea class="form-control" name="address" rows="2"></textarea>
+          </div>
+          <div class="row g-2 mb-2">
+            <div class="col-6">
+              <label class="form-label">Category</label>
+              <input class="form-control" name="category" placeholder="e.g., IT Services">
+            </div>
+            <div class="col-6">
+              <label class="form-label">Tax ID</label>
+              <input class="form-control" name="tax_id">
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Notes</label>
+            <textarea class="form-control" name="notes" rows="2"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Cancel</button>
+          <button class="btn btn-primary">Add Supplier</button>
+        </div>
+      </form>
+    </div>
+  </div>
 </div>
 
 <!-- Edit Transaction Modal -->
@@ -527,6 +624,64 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   });
 </script>
 <script>
+  // Handle supplier modal
+  const addSupplierModalEl = document.getElementById('addSupplierModal');
+  const addSupplierBsModal = new bootstrap.Modal(addSupplierModalEl);
+  const addSupplierBtn = document.getElementById('addSupplierBtn');
+  const addSupplierForm = document.getElementById('addSupplierForm');
+  const supplierSelect = document.getElementById('supplierIdTx');
+  const typeSelect = document.getElementById('typeSelect');
+
+  addSupplierBtn.addEventListener('click', function() {
+    addSupplierBsModal.show();
+  });
+
+  addSupplierForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const formData = new FormData(this);
+    const submitBtn = this.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Adding...';
+    
+    fetch('transactions.php', {
+      method: 'POST',
+      body: formData
+    })
+    .then(response => response.text())
+    .then(text => {
+      // Parse the response to check for success message
+      if (text.includes('Supplier created successfully')) {
+        // Close modal and reload to update dropdown
+        addSupplierBsModal.hide();
+        window.location.reload();
+      } else {
+        // Show error
+        alert('Error creating supplier. Please try again.');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Add Supplier';
+      }
+    })
+    .catch(error => {
+      alert('Error creating supplier: ' + error.message);
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Add Supplier';
+    });
+  });
+
+  // Show supplier dropdown only for expenses
+  function toggleSupplierRow() {
+    const supplierRow = supplierSelect.closest('.col-12');
+    if (typeSelect.value === 'expense') {
+      supplierRow.style.display = '';
+    } else {
+      supplierRow.style.display = 'none';
+      supplierSelect.value = '';
+    }
+  }
+
+  typeSelect.addEventListener('change', toggleSupplierRow);
+  toggleSupplierRow(); // Initialize on page load
+
   (function(){
     const editModalEl = document.getElementById('editTxModal');
     const bsModal = new bootstrap.Modal(editModalEl);

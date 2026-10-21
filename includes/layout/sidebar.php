@@ -4,6 +4,7 @@ $active_page = $active_page ?? '';
 $current = basename($_SERVER['PHP_SELF']);
 $dashActive = ($active_page==='dashboard' || $current==='dashboard.php') ? ' active' : '';
 $clientsActive = ($active_page==='clients' || $current==='clients.php') ? ' active' : '';
+$suppliersActive = ($active_page==='suppliers' || $current==='suppliers.php') ? ' active' : '';
 $txActive = ($active_page==='transactions' || $current==='transactions.php') ? ' active' : '';
 $smsActive = ($active_page==='sms' || $current==='sms.php') ? ' active' : '';
 $productsActive = ($active_page==='products' || $current==='products.php') ? ' active' : '';
@@ -12,7 +13,7 @@ $usersActive = ($active_page==='users' || $current==='users.php') ? ' active' : 
 $auditActive = ($active_page==='audit' || $current==='audit_logs.php') ? ' active' : '';
 $profileActive = ($active_page==='profile' || $current==='profile.php') ? ' active' : '';
 $userName = htmlspecialchars($_SESSION['full_name'] ?? '');
-$openManagement = ($clientsActive || $txActive || $smsActive || $invoicesActive || $productsActive) ? ' open' : '';
+$openManagement = ($clientsActive || $suppliersActive || $txActive || $smsActive || $invoicesActive || $productsActive) ? ' open' : '';
 $openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='reports') ? ' open' : '';
 ?>
 <aside id="appSidebar" class="sidebar d-flex flex-column p-3">
@@ -47,6 +48,9 @@ $openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='re
       <div class="submenu">
         <a href="clients.php" class="nav-link<?= $clientsActive ?>" title="Clients"<?= $clientsActive ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-people"></i> <span class="nav-text">Clients</span>
+        </a>
+        <a href="suppliers.php" class="nav-link<?= $suppliersActive ?>" title="Suppliers"<?= $suppliersActive ? ' aria-current="page"' : '' ?>>
+          <i class="bi bi-truck"></i> <span class="nav-text">Suppliers</span>
         </a>
         <a href="products.php" class="nav-link<?= $productsActive ?>" title="Products"<?= $productsActive ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-box-seam"></i> <span class="nav-text">Products</span>
