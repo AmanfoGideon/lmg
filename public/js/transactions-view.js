@@ -16,6 +16,10 @@ let transactions = [];
 let editModal;
 const currencySymbol = globalThis.APP_CONFIG?.currencySymbol || "₵";
 
+function makeRequestKey() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 function addOption(select, value, label) {
   const option = document.createElement("option");
   option.value = value;
@@ -219,7 +223,8 @@ function renderTransactions(query = "") {
     });
     const actions = document.createElement("td");
     actions.className = "d-flex gap-1";
-    if (["income", "payment"].includes(transaction.type)) {
+    if (["income", "payment"].includes(transaction.type)
+        && !(transaction.type === "payment" && transaction._sync_status === "pending")) {
       const receipt = document.createElement("button");
       receipt.className = "btn btn-sm btn-outline-light";
       receipt.type = "button";
@@ -317,6 +322,7 @@ export async function initTransactions() {
   document.getElementById("transactionDate").value = new Date().toISOString().slice(0, 10);
 
   const form = document.getElementById("transactionForm");
+  let transactionRequestKey = makeRequestKey();
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     setFormBusy(form, true);
@@ -331,7 +337,9 @@ export async function initTransactions() {
         description: values.description.trim(),
         date: values.date,
         invoiceId: values.invoice_id,
+        requestKey: transactionRequestKey,
       });
+      transactionRequestKey = makeRequestKey();
       if (values.client_id === "__new__") window.dispatchEvent(new Event("lmg:clients-changed"));
       form.reset();
       document.getElementById("transactionDate").value = new Date().toISOString().slice(0, 10);

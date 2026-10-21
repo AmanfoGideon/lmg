@@ -140,10 +140,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phone = trim($_POST['phone']);
     $email = trim($_POST['email']);
     $address = trim($_POST['address']);
+    $conn->begin_transaction();
     $stmt = $conn->prepare("INSERT INTO clients (full_name, phone, email, address) VALUES (?,?,?,?)");
     $stmt->bind_param('ssss', $full_name, $phone, $email, $address);
     $message = $stmt->execute() ? 'Client added' : 'Error adding client';
-    if ($message === 'Client added') { log_action($conn, 'client_create', $full_name); }
+    if ($message === 'Client added') {
+      log_action($conn, 'client_create', $full_name, [
+        'entity_id' => (string)$stmt->insert_id,
+        'new_values' => ['full_name'=>$full_name,'phone'=>$phone,'email'=>$email,'address'=>$address]
+      ]);
+      $conn->commit();
+    } else { $conn->rollback(); }
     $stmt->close();
   }
   if ($action === 'update') {
@@ -152,18 +159,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phone = trim($_POST['phone']);
     $email = trim($_POST['email']);
     $address = trim($_POST['address']);
+    $beforeStmt = $conn->prepare("SELECT full_name, phone, email, address FROM clients WHERE id=? LIMIT 1");
+    $beforeStmt->bind_param('i', $id);
+    $beforeStmt->execute();
+    $beforeResult = $beforeStmt->get_result();
+    $beforeClient = $beforeResult->fetch_assoc() ?: null;
+    $beforeStmt->close();
+    $conn->begin_transaction();
     $stmt = $conn->prepare("UPDATE clients SET full_name=?, phone=?, email=?, address=? WHERE id=?");
     $stmt->bind_param('ssssi', $full_name, $phone, $email, $address, $id);
     $message = $stmt->execute() ? 'Client updated' : 'Error updating client';
-    if ($message === 'Client updated') { log_action($conn, 'client_update', (string)$id); }
+    if ($message === 'Client updated' && $beforeClient) {
+      log_action($conn, 'client_update', (string)$id, [
+        'entity_id' => (string)$id,
+        'old_values' => $beforeClient,
+        'new_values' => ['full_name'=>$full_name,'phone'=>$phone,'email'=>$email,'address'=>$address]
+      ]);
+      $conn->commit();
+    } else { $conn->rollback(); }
     $stmt->close();
   }
   if ($action === 'delete') {
     $id = (int)$_POST['id'];
+    $beforeStmt = $conn->prepare("SELECT full_name, phone, email, address FROM clients WHERE id=? LIMIT 1");
+    $beforeStmt->bind_param('i', $id);
+    $beforeStmt->execute();
+    $beforeResult = $beforeStmt->get_result();
+    $beforeClient = $beforeResult->fetch_assoc() ?: null;
+    $beforeStmt->close();
+    $conn->begin_transaction();
     $stmt = $conn->prepare("DELETE FROM clients WHERE id=?");
     $stmt->bind_param('i', $id);
     $message = $stmt->execute() ? 'Client deleted' : 'Error deleting client';
-    if ($message === 'Client deleted') { log_action($conn, 'client_delete', (string)$id); }
+    if ($message === 'Client deleted' && $beforeClient) {
+      log_action($conn, 'client_delete', (string)$id, ['entity_id'=>(string)$id,'old_values'=>$beforeClient]);
+      $conn->commit();
+    } else { $conn->rollback(); }
     $stmt->close();
   }
   if ($action === 'import_csv') {
@@ -250,9 +281,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $chkNameStmt->close();
         $updStmt->close();
         $insStmt->close();
-        $conn->commit();
         $message = "Imported: ".$inserted.", Updated: ".$updated;
-        log_action($conn, 'clients_import_csv', (string)$inserted.'|'.(string)$updated);
+        log_action($conn, 'clients_import_csv', (string)$inserted.'|'.(string)$updated, [
+          'metadata' => ['inserted'=>$inserted,'updated'=>$updated]
+        ]);
+        $conn->commit();
         header('Location: clients.php?msg='.urlencode($message));
         exit;
       } else {

@@ -144,7 +144,8 @@ export async function createInvoice(invoice) {
     return await createInvoiceOffline(invoice);
   }
 
-  return unwrap(await getSupabase().rpc("create_invoice", {
+  return unwrap(await getSupabase().rpc("create_invoice_idempotent", {
+    p_idempotency_key: invoice.requestKey,
     p_client_id: invoice.clientId ?? null,
     p_client_name: invoice.clientName ?? null,
     p_invoice_date: invoice.invoiceDate,
@@ -162,6 +163,7 @@ export async function recordInvoicePayment(payment) {
     p_payment_method: payment.paymentMethod || null,
     p_description: payment.description || null,
     p_date: payment.date || null,
+    p_request_key: payment.requestKey,
   }));
 }
 
@@ -187,6 +189,19 @@ export async function listTransactions(limit = 100) {
 }
 
 export async function createTransaction(transaction) {
+  if (transaction.type === "payment" && !isOnline()) {
+    throw new Error("Payments must be recorded while online so they are not counted as received before confirmation.");
+  }
+  if (transaction.type === "payment" && transaction.invoiceId) {
+    return await recordInvoicePayment({
+      invoiceId: transaction.invoiceId,
+      amount: transaction.amount,
+      paymentMethod: transaction.paymentMethod,
+      description: transaction.description,
+      date: transaction.date,
+      requestKey: transaction.requestKey,
+    });
+  }
   if (!isOnline()) {
     return await createTransactionOffline(transaction);
   }
@@ -259,10 +274,6 @@ export async function getInvoiceDetails(id) {
     .select("id, invoice_number, client_id, invoice_date, due_date, subtotal, tax, total, notes, status, clients(full_name, phone, email, address), invoice_items(id, item_name, quantity, price, total)")
     .eq("id", id)
     .single());
-}
-
-export async function setInvoiceStatus(id, status) {
-  return unwrap(await getSupabase().from("invoices").update({ status }).eq("id", id).select().single());
 }
 
 export async function listReportBranches() {

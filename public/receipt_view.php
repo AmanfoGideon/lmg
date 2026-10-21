@@ -1,14 +1,24 @@
 <?php
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
+require_once "../includes/log.php";
 
 $id = (int)($_GET['id'] ?? 0);
-$stmt = $conn->prepare("SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, c.full_name, c.phone, c.email FROM transactions t LEFT JOIN clients c ON c.id=t.client_id WHERE t.id=?");
+$stmt = $conn->prepare("SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, c.full_name, c.phone, c.email, i.invoice_number FROM transactions t LEFT JOIN clients c ON c.id=t.client_id LEFT JOIN invoices i ON i.id=t.invoice_id WHERE t.id=?");
 $stmt->bind_param('i', $id);
 $stmt->execute();
-$stmt->bind_result($tid,$type,$amount,$date,$method,$desc,$client_name,$client_phone,$client_email);
+$stmt->bind_result($tid,$type,$amount,$date,$method,$desc,$client_name,$client_phone,$client_email,$invoice_number);
 $found = $stmt->fetch();
 $stmt->close();
+if ($found && !in_array($type, ['income', 'payment'], true)) $found = false;
+if ($found && in_array($type, ['income', 'payment'], true)) {
+  audit_event($conn, [
+    'action' => 'receipt.issued', 'module' => 'receipts',
+    'entity_type' => 'transaction', 'entity_id' => (string)$tid,
+    'description' => 'Payment receipt viewed or issued.',
+    'metadata' => ['transaction_type'=>$type,'amount'=>(float)$amount,'date'=>$date]
+  ]);
+}
 $receipt_number = $found ? ("RCPT-" . date("Ymd", strtotime($date)) . "-" . str_pad($tid, 5, "0", STR_PAD_LEFT)) : '';
 $userName = htmlspecialchars($_SESSION['full_name']);
 $role = $_SESSION['role'] ?? 'staff';
@@ -79,6 +89,7 @@ $role = $_SESSION['role'] ?? 'staff';
       <div class="mb-3">
         <div class="fw-bold mb-1">Description</div>
         <div class="text-muted"><?= htmlspecialchars($desc ?? '') ?></div>
+        <?php if (!empty($invoice_number)): ?><div class="text-muted small mt-1">Invoice: <?= htmlspecialchars($invoice_number) ?></div><?php endif; ?>
       </div>
       <div class="mt-4 d-flex justify-content-end">
         <button class="btn btn-outline-light me-2" onclick="window.history.back()"><i class="bi bi-arrow-left"></i> Back</button>

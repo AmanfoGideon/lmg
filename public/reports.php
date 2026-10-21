@@ -1,6 +1,7 @@
 <?php
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
+require_once "../includes/log.php";
 
 $message = '';
 $group = $_GET['group'] ?? 'daily';
@@ -21,10 +22,6 @@ if (isset($_POST['action']) && $_POST['action']==='export_csv') {
   $start = $_POST['start'] ?? date('Y-m-01');
   $end = $_POST['end'] ?? date('Y-m-t');
   if (!in_array($group, $allowedGroups)) $group = 'daily';
-  header('Content-Type: text/csv; charset=utf-8');
-  header('Content-Disposition: attachment; filename=reports_'.$group.'_'.date('Ymd').'.csv');
-  $out = fopen('php://output', 'w');
-  fputcsv($out, ['Period','Income','Expense','Profit','Transactions']);
   $rows = [];
   $sql = "SELECT type, amount, date FROM transactions WHERE date BETWEEN ? AND ?".($hasBranch && $branch!=='' ? " AND branch=?" : "")." ORDER BY date ASC";
   $stmt = $conn->prepare($sql);
@@ -40,6 +37,15 @@ if (isset($_POST['action']) && $_POST['action']==='export_csv') {
     if ($r['type']==='expense') $rows[$key]['expense'] += (float)$r['amount'];
     $rows[$key]['count']++;
   }
+  audit_event($conn, [
+    'action' => 'report.exported', 'module' => 'reports',
+    'description' => 'Financial report exported to CSV.',
+    'metadata' => ['group'=>$group,'start'=>$start,'end'=>$end,'branch_filter'=>$branch !== '']
+  ]);
+  header('Content-Type: text/csv; charset=utf-8');
+  header('Content-Disposition: attachment; filename=reports_'.$group.'_'.date('Ymd').'.csv');
+  $out = fopen('php://output', 'w');
+  fputcsv($out, ['Period','Income','Expense','Profit','Transactions']);
   foreach($rows as $period=>$vals) {
     $profit = $vals['income'] - $vals['expense'];
     fputcsv($out, [$period, number_format($vals['income'],2,'.',''), number_format($vals['expense'],2,'.',''), number_format($profit,2,'.',''), $vals['count']]);

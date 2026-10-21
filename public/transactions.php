@@ -2,17 +2,22 @@
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
 require_once "../includes/log.php";
+require_once "../includes/invoice.php";
 
 $message = '';
+$transactionRequestKey = bin2hex(random_bytes(16));
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   if (!csrf_verify()) {
     $message = 'Invalid request token';
   } else {
   $action = $_POST['action'] ?? '';
+  if (isset($_POST['request_key'])) $transactionRequestKey = (string)$_POST['request_key'];
   if ($action === 'create') {
     $client_id = (int)($_POST['client_id'] ?? 0);
     $client_name = trim($_POST['client_name'] ?? '');
-    if ($client_id <= 0 && $client_name !== '') {
+    $type = $_POST['type'] ?? 'income';
+    $invoice_id = (int)($_POST['invoice_id'] ?? 0);
+    if (!($type === 'payment' && $invoice_id > 0) && $client_id <= 0 && $client_name !== '') {
       $find = $conn->prepare("SELECT id FROM clients WHERE full_name=? LIMIT 1");
       $find->bind_param('s', $client_name);
       $find->execute();
@@ -20,104 +25,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       if ($find->fetch()) { $client_id = (int)$foundId; }
       $find->close();
       if ($client_id <= 0) {
+        $conn->begin_transaction();
         $ins = $conn->prepare("INSERT INTO clients (full_name, phone, email, address) VALUES (?,?,?,?)");
         $empty = '';
         $ins->bind_param('ssss', $client_name, $empty, $empty, $empty);
-        if ($ins->execute()) { $client_id = $ins->insert_id; }
+        if ($ins->execute()) {
+          $client_id = (int)$ins->insert_id;
+          log_action($conn, 'client_create', $client_name, [
+            'entity_id' => (string)$client_id,
+            'new_values' => ['full_name'=>$client_name]
+          ]);
+          $conn->commit();
+        } else { $conn->rollback(); }
         $ins->close();
       }
     }
     $amount = (float)($_POST['amount'] ?? 0);
-    $type = $_POST['type'] ?? 'income';
     $payment_method = $_POST['payment_method'] ?? null;
     $description = trim($_POST['description'] ?? '');
     $date = $_POST['date'] ?: date('Y-m-d');
-    $invoice_id = (int)($_POST['invoice_id'] ?? 0);
     if (!in_array($type, ['income','expense','invoice','payment'])) { $type = 'income'; }
-    if ($client_id > 0) {
-      if ($payment_method && !in_array($payment_method, ['cash','mobile','card'])) { $payment_method = null; }
-      if ($type === 'payment' && $invoice_id > 0) {
-        $checkInv = $conn->prepare("SELECT id, client_id, total FROM invoices WHERE id=? LIMIT 1");
-        $checkInv->bind_param('i', $invoice_id);
-        $checkInv->execute();
-        $checkInv->bind_result($invId,$invClientId,$invTotal);
-        $invFound = $checkInv->fetch();
-        $checkInv->close();
-        if ($invFound && (int)$invClientId === $client_id) {
-          $stmt = $conn->prepare("INSERT INTO transactions (client_id, amount, type, payment_method, description, date, invoice_id) VALUES (?,?,?,?,?,?,?)");
-          $stmt->bind_param('idssssi', $client_id, $amount, $type, $payment_method, $description, $date, $invoice_id);
-          $message = $stmt->execute() ? 'Transaction added' : 'Error adding transaction';
-          if ($message === 'Transaction added') {
-            $sum = $conn->prepare("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE invoice_id=? AND type='payment'");
-            $sum->bind_param('i', $invoice_id);
-            $sum->execute();
-            $sum->bind_result($paidTotal);
-            $sum->fetch();
-            $sum->close();
-            $newStatus = 'unpaid';
-            if ((float)$paidTotal > 0 && (float)$paidTotal < (float)$invTotal) { $newStatus = 'partial'; }
-            if ((float)$paidTotal >= (float)$invTotal) { $newStatus = 'paid'; }
-            $up = $conn->prepare("UPDATE invoices SET status=? WHERE id=?");
-            $up->bind_param('si', $newStatus, $invoice_id);
-            $up->execute();
-            $up->close();
-          }
-          if ($message === 'Transaction added') { log_action($conn, 'transaction_create', (string)$client_id.'|'.$type.'|'.$amount.'|INV#'.$invoice_id); }
-          $stmt->close();
-        } else {
-          $stmt = $conn->prepare("INSERT INTO transactions (client_id, amount, type, payment_method, description, date) VALUES (?,?,?,?,?,?)");
-          $stmt->bind_param('idssss', $client_id, $amount, $type, $payment_method, $description, $date);
-          $message = $stmt->execute() ? 'Transaction added' : 'Error adding transaction';
-          if ($message === 'Transaction added') { log_action($conn, 'transaction_create', (string)$client_id.'|'.$type.'|'.$amount); }
-          $stmt->close();
-        }
-      } else {
-        $stmt = $conn->prepare("INSERT INTO transactions (client_id, amount, type, payment_method, description, date) VALUES (?,?,?,?,?,?)");
-        $stmt->bind_param('idssss', $client_id, $amount, $type, $payment_method, $description, $date);
-        $message = $stmt->execute() ? 'Transaction added' : 'Error adding transaction';
-        if ($message === 'Transaction added') { log_action($conn, 'transaction_create', (string)$client_id.'|'.$type.'|'.$amount); }
-        $stmt->close();
+    if ($type === 'payment' && $invoice_id > 0) {
+      try {
+        $result = invoice_record_payment($conn, $invoice_id, (string)($_POST['amount'] ?? ''), $payment_method, $description, (string)$date, $transactionRequestKey);
+        $message = $result['duplicate'] ? 'Payment already recorded' : 'Payment added';
+        $transactionRequestKey = bin2hex(random_bytes(16));
+      } catch (InvalidArgumentException $e) {
+        $message = $e->getMessage();
+      } catch (Throwable $e) {
+        $message = 'Payment could not be recorded. Please try again.';
+        error_log('Invoice payment failed: '.$e->getMessage());
       }
+    } elseif ($client_id > 0) {
+      if ($payment_method && !in_array($payment_method, ['cash','mobile','card'])) { $payment_method = null; }
+      $conn->begin_transaction();
+      $stmt = $conn->prepare("INSERT INTO transactions (client_id, amount, type, payment_method, description, date) VALUES (?,?,?,?,?,?)");
+      $stmt->bind_param('idssss', $client_id, $amount, $type, $payment_method, $description, $date);
+      $message = $stmt->execute() ? 'Transaction added' : 'Error adding transaction';
+      if ($message === 'Transaction added') {
+        log_action($conn, 'transaction_create', (string)$client_id.'|'.$type.'|'.$amount, [
+          'action' => 'transaction.'.($type === 'income' ? 'income' : ($type === 'expense' ? 'expense' : $type)).'.created',
+          'entity_id' => (string)$stmt->insert_id,
+          'new_values' => ['client_id'=>$client_id,'amount'=>$amount,'type'=>$type,'payment_method'=>$payment_method,'description'=>$description,'date'=>$date]
+        ]);
+        $conn->commit();
+      } else {
+        $conn->rollback();
+      }
+      $stmt->close();
     } else {
       $message = 'Specify a client by name';
     }
     } elseif ($action === 'delete') {
       $txId = (int)($_POST['id'] ?? 0);
       if ($txId > 0) {
-        $q = $conn->prepare("SELECT id, type, invoice_id FROM transactions WHERE id=? LIMIT 1");
+        $q = $conn->prepare("SELECT id, client_id, type, amount, date, payment_method, description, invoice_id FROM transactions WHERE id=? LIMIT 1");
         $q->bind_param('i', $txId);
         $q->execute();
-        $q->bind_result($foundId, $foundType, $foundInv);
+        $q->bind_result($foundId, $foundClientId, $foundType, $foundAmount, $foundDate, $foundMethod, $foundDescription, $foundInv);
         if ($q->fetch()) {
           $q->close();
-          $del = $conn->prepare("DELETE FROM transactions WHERE id=?");
+          $conn->begin_transaction();
+          $del = $conn->prepare("DELETE FROM transactions WHERE id=? AND NOT (type='payment' AND invoice_id IS NOT NULL)");
           $del->bind_param('i', $txId);
-          if ($del->execute()) {
+          if ($del->execute() && $del->affected_rows > 0) {
             $message = 'Transaction deleted';
-            log_action($conn, 'transaction_delete', (string)$txId);
-            if ($foundType === 'payment' && (int)$foundInv > 0) {
-              $sum = $conn->prepare("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE invoice_id=? AND type='payment'");
-              $sum->bind_param('i', $foundInv);
-              $sum->execute();
-              $sum->bind_result($paidTotal);
-              $sum->fetch();
-              $sum->close();
-              $checkInv = $conn->prepare("SELECT total FROM invoices WHERE id=? LIMIT 1");
-              $checkInv->bind_param('i', $foundInv);
-              $checkInv->execute();
-              $checkInv->bind_result($invTotal);
-              $checkInv->fetch();
-              $checkInv->close();
-              $newStatus = 'unpaid';
-              if ((float)$paidTotal > 0 && (float)$paidTotal < (float)$invTotal) { $newStatus = 'partial'; }
-              if ((float)$paidTotal >= (float)$invTotal) { $newStatus = 'paid'; }
-              $up = $conn->prepare("UPDATE invoices SET status=? WHERE id=?");
-              $up->bind_param('si', $newStatus, $foundInv);
-              $up->execute();
-              $up->close();
-            }
+            log_action($conn, 'transaction_delete', (string)$txId, [
+              'entity_id' => (string)$txId,
+              'old_values' => ['client_id'=>$foundClientId,'amount'=>$foundAmount,'type'=>$foundType,'date'=>$foundDate,'payment_method'=>$foundMethod,'description'=>$foundDescription,'invoice_id'=>$foundInv]
+            ]);
+            $conn->commit();
           } else {
-            $message = 'Error deleting transaction';
+            $conn->rollback();
+            $message = ($foundType === 'payment' && $foundInv !== null)
+              ? 'Invoice payments are preserved in the financial history; record a reversal instead.'
+              : 'Error deleting transaction';
           }
           $del->close();
         } else {
@@ -128,6 +110,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($action === 'update') {
       $txId = (int)($_POST['id'] ?? 0);
       if ($txId > 0) {
+        $oldStmt = $conn->prepare("SELECT client_id, amount, type, date, payment_method, description, invoice_id FROM transactions WHERE id=? LIMIT 1");
+        $oldStmt->bind_param('i', $txId);
+        $oldStmt->execute();
+        $oldResult = $oldStmt->get_result();
+        $oldTx = $oldResult->fetch_assoc() ?: null;
+        $oldStmt->close();
+        $conn->begin_transaction();
         $amount = (float)($_POST['amount'] ?? 0);
         $type = $_POST['type'] ?? 'income';
         $payment_method = $_POST['payment_method'] ?? null;
@@ -135,34 +124,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $date = $_POST['date'] ?: date('Y-m-d');
         $invoice_id = (int)($_POST['invoice_id'] ?? 0);
         if (!in_array($type, ['income','expense','invoice','payment'])) { $type = 'income'; }
-        $upd = $conn->prepare("UPDATE transactions SET amount=?, type=?, payment_method=?, description=?, date=?, invoice_id=? WHERE id=?");
-        $upd->bind_param('dssssii', $amount, $type, $payment_method, $description, $date, $invoice_id, $txId);
-        if ($upd->execute()) {
+        $upd = $conn->prepare("UPDATE transactions SET amount=?, type=?, payment_method=?, description=?, date=?, invoice_id=? WHERE id=? AND NOT (type='payment' AND invoice_id IS NOT NULL) AND NOT (?='payment' AND ?>0)");
+        $upd->bind_param('dssssiisi', $amount, $type, $payment_method, $description, $date, $invoice_id, $txId, $type, $invoice_id);
+        if ($upd->execute() && $upd->affected_rows > 0) {
           $message = 'Transaction updated';
-          log_action($conn, 'transaction_update', (string)$txId.'|'.$type.'|'.$amount);
-          if ($invoice_id > 0) {
-            $sum = $conn->prepare("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE invoice_id=? AND type='payment'");
-            $sum->bind_param('i', $invoice_id);
-            $sum->execute();
-            $sum->bind_result($paidTotal);
-            $sum->fetch();
-            $sum->close();
-            $checkInv = $conn->prepare("SELECT total FROM invoices WHERE id=? LIMIT 1");
-            $checkInv->bind_param('i', $invoice_id);
-            $checkInv->execute();
-            $checkInv->bind_result($invTotal);
-            $checkInv->fetch();
-            $checkInv->close();
-            $newStatus = 'unpaid';
-            if ((float)$paidTotal > 0 && (float)$paidTotal < (float)$invTotal) { $newStatus = 'partial'; }
-            if ((float)$paidTotal >= (float)$invTotal) { $newStatus = 'paid'; }
-            $up = $conn->prepare("UPDATE invoices SET status=? WHERE id=?");
-            $up->bind_param('si', $newStatus, $invoice_id);
-            $up->execute();
-            $up->close();
+          if ($oldTx) {
+            log_action($conn, 'transaction_update', (string)$txId.'|'.$type.'|'.$amount, [
+              'entity_id' => (string)$txId,
+              'old_values' => $oldTx,
+              'new_values' => ['client_id'=>(int)$oldTx['client_id'],'amount'=>$amount,'type'=>$type,'date'=>$date,'payment_method'=>$payment_method,'description'=>$description,'invoice_id'=>$invoice_id ?: null]
+            ]);
           }
+          if ($invoice_id > 0 && $type !== 'payment') {
+            $invoiceStatus = invoice_recalculate_status($conn, $invoice_id);
+            if ($invoiceStatus['status'] !== $invoiceStatus['old_status']) {
+              audit_event($conn, [
+                'action'=>'invoice.status.updated','module'=>'invoices','entity_type'=>'invoice','entity_id'=>(string)$invoice_id,
+                'description'=>'Invoice payment status recalculated after a transaction update.',
+                'old_values'=>['status'=>$invoiceStatus['old_status']],
+                'new_values'=>['status'=>$invoiceStatus['status'],'paid_total'=>invoice_cents_decimal($invoiceStatus['paid_cents'])]
+              ]);
+            }
+          }          $conn->commit();
         } else {
-          $message = 'Error updating transaction';
+          $conn->rollback();
+          $message = (($oldTx && $oldTx['type'] === 'payment' && $oldTx['invoice_id'] !== null) || ($type === 'payment' && $invoice_id > 0))
+            ? 'Invoice payments cannot be edited; record a reversal instead.'
+            : 'Error updating transaction';
         }
         $upd->close();
       }
@@ -210,6 +198,14 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
   <link rel="stylesheet" href="css/dashboard.css">
+  <style>
+    .transaction-type-filters .btn {
+      transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .transaction-type-filters .btn { transition: none; }
+    }
+  </style>
   <link rel="icon" href="../favicon/favicon.ico" sizes="any">
   <link rel="icon" type="image/svg+xml" href="../favicon/favicon.svg">
   <link rel="icon" type="image/png" sizes="96x96" href="../favicon/favicon-96x96.png">
@@ -233,6 +229,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
           <form method="POST" class="row g-2">
             <?= csrf_input() ?>
             <input type="hidden" name="action" value="create">
+            <input type="hidden" name="request_key" value="<?= htmlspecialchars($transactionRequestKey, ENT_QUOTES) ?>">
             <div class="col-12">
               <label class="form-label">Client</label>
               <input class="form-control" list="clientsDatalist" name="client_name" id="clientNameTx" placeholder="Type name to search or add new" required>
@@ -282,10 +279,10 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       <div class="col-lg-8">
         <div id="listTx" class="card p-3">
           <h6 class="mb-3">Recent Transactions</h6>
-          <div class="d-flex flex-wrap gap-2 mb-3" role="group" aria-label="Filter transactions by type">
+          <div class="transaction-type-filters d-flex flex-wrap gap-2 mb-3" role="group" aria-label="Filter transactions by type">
             <button type="button" class="btn btn-sm btn-outline-light active" data-transaction-filter="all" aria-pressed="true">All Transactions</button>
-            <button type="button" class="btn btn-sm btn-outline-light" data-transaction-filter="income" aria-pressed="false">Income</button>
-            <button type="button" class="btn btn-sm btn-outline-light" data-transaction-filter="expense" aria-pressed="false">Expenses</button>
+            <button type="button" class="btn btn-sm btn-outline-success" data-transaction-filter="income" aria-pressed="false"><i class="bi bi-arrow-down-left me-1" aria-hidden="true"></i>Income</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" data-transaction-filter="expense" aria-pressed="false"><i class="bi bi-arrow-up-right me-1" aria-hidden="true"></i>Expenses</button>
           </div>
           <div class="table-responsive">
             <table id="transactionsTable" class="table table-borderless table-sm table-striped table-hover table-brand datatable">
@@ -503,6 +500,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
         });
         table.settings()[0].oLanguage.sEmptyTable = emptyMessages[savedFilter];
         table.settings()[0].oLanguage.sZeroRecords = emptyMessages[savedFilter];
+        table.draw(false);
     });
   });
 </script>

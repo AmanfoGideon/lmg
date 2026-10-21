@@ -1,8 +1,13 @@
 <?php
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
+require_once "../includes/log.php";
 $role = $_SESSION['role'] ?? 'staff';
 if ($role !== 'admin') {
+  audit_event($conn, [
+    'action' => 'security.backup_access.denied', 'module' => 'backup', 'status' => 'denied',
+    'description' => 'A user without administrator access tried to access backups.'
+  ]);
   header('Location: dashboard.php');
   exit;
 }
@@ -16,6 +21,7 @@ $tables = [
   'products' => ['id','name','sku','price','stock','min_stock','created_at'],
   'client_interactions' => ['id','client_id','note','created_at'],
   'user_logs' => ['id','user_id','action','details','created_at'],
+  'audit_events' => ['id','event_uuid','actor_user_id','actor_name_snapshot','actor_role_snapshot','action','module','entity_type','entity_id','description','status','old_values','new_values','metadata','ip_address','user_agent','request_id','origin','created_at'],
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'export') {
@@ -29,12 +35,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'expor
     header('Location: backup.php');
     exit;
   }
+  $cols = implode(',', $tables[$table]);
+  $res = $conn->query("SELECT ".$cols." FROM ".$table);
+  audit_event($conn, [
+    'action' => 'backup.exported', 'module' => 'backup', 'entity_type' => 'table', 'entity_id' => $table,
+    'description' => 'Administrator exported a table backup.'
+  ]);
   header('Content-Type: text/csv; charset=utf-8');
   header('Content-Disposition: attachment; filename='.$table.'_backup_'.date('Ymd_His').'.csv');
   $out = fopen('php://output', 'w');
   fputcsv($out, $tables[$table]);
-  $cols = implode(',', $tables[$table]);
-  $res = $conn->query("SELECT ".$cols." FROM ".$table);
   while($row = $res->fetch_assoc()) {
     $csvRow = [];
     foreach($tables[$table] as $col) { $csvRow[] = $row[$col]; }
@@ -50,8 +60,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'expor
     exit;
   }
   $zipName = 'backup_all_'.date('Ymd_His').'.zip';
-  header('Content-Type: application/zip');
-  header('Content-Disposition: attachment; filename='.$zipName);
   $zip = new ZipArchive();
   $tmpFile = tempnam(sys_get_temp_dir(), 'zip');
   $zip->open($tmpFile, ZipArchive::CREATE | ZipArchive::OVERWRITE);
@@ -71,6 +79,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'expor
     $zip->addFromString($table.'.csv', $csvContent);
   }
   $zip->close();
+  audit_event($conn, [
+    'action' => 'backup.exported', 'module' => 'backup', 'entity_type' => 'backup',
+    'description' => 'Administrator exported a full system backup.'
+  ]);
+  header('Content-Type: application/zip');
+  header('Content-Disposition: attachment; filename='.$zipName);
   readfile($tmpFile);
   @unlink($tmpFile);
   exit;

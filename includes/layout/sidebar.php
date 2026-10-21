@@ -9,6 +9,7 @@ $smsActive = ($active_page==='sms' || $current==='sms.php') ? ' active' : '';
 $productsActive = ($active_page==='products' || $current==='products.php') ? ' active' : '';
 $invoicesActive = ($active_page==='invoices' || $current==='invoices.php' || $current==='invoice_create.php' || $current==='invoice_view.php') ? ' active' : '';
 $usersActive = ($active_page==='users' || $current==='users.php') ? ' active' : '';
+$auditActive = ($active_page==='audit' || $current==='audit_logs.php') ? ' active' : '';
 $profileActive = ($active_page==='profile' || $current==='profile.php') ? ' active' : '';
 $userName = htmlspecialchars($_SESSION['full_name'] ?? '');
 $openManagement = ($clientsActive || $txActive || $smsActive || $invoicesActive || $productsActive) ? ' open' : '';
@@ -79,7 +80,7 @@ $openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='re
       </div>
     </div>
     <?php if ($role === 'admin'): ?>
-    <div class="menu-group<?= $usersActive ? ' open':'' ?>">
+    <div class="menu-group<?= ($usersActive || $auditActive) ? ' open':'' ?>">
       <button type="button" class="nav-link w-100 text-start menu-group-toggle" data-group="admin">
         <span><i class="bi bi-shield-lock"></i> <span class="nav-text">Administration</span></span>
         <i class="bi bi-chevron-down caret"></i>
@@ -87,6 +88,9 @@ $openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='re
       <div class="submenu">
         <a href="users.php" class="nav-link<?= $usersActive ?>" title="Manage Users"<?= $usersActive ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-people-gear"></i> <span class="nav-text">Users</span>
+        </a>
+        <a href="audit_logs.php" class="nav-link<?= $auditActive ?>" title="Audit Trail"<?= $auditActive ? ' aria-current="page"' : '' ?>>
+          <i class="bi bi-journal-text"></i> <span class="nav-text">Audit Trail</span>
         </a>
         <a href="backup.php" class="nav-link<?= ($current==='backup.php')?' active':'' ?>" title="Backup">
           <i class="bi bi-database-lock"></i> <span class="nav-text">Backup</span>

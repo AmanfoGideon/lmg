@@ -110,11 +110,24 @@ export async function attemptSync() {
   updateSyncStatusUI("syncing");
 
   try {
-    const pendingCount = await db.sync_queue.where("status").equals(QueueStatus.PENDING).count();
+    const pendingQueue = db.sync_queue.where("status").equals(QueueStatus.PENDING);
+    const totalPendingCount = await pendingQueue.count();
 
-    if (pendingCount === 0) {
+    if (totalPendingCount === 0) {
       console.log("[Sync] No pending changes to sync");
       updateSyncStatusUI("synced");
+      return;
+    }
+
+    const eligibleAt = Date.now();
+    const isRetryReady = (item) => {
+      if (!item.next_retry_at) return true;
+      const nextRetryAt = Date.parse(item.next_retry_at);
+      return !Number.isFinite(nextRetryAt) || nextRetryAt <= eligibleAt;
+    };
+    const pendingCount = await pendingQueue.filter(isRetryReady).count();
+    if (pendingCount === 0) {
+      updateSyncStatusUI("partial");
       return;
     }
 
@@ -123,13 +136,16 @@ export async function attemptSync() {
     // Process in batches
     let processed = 0;
     let failed = 0;
+    let attempted = 0;
 
-    while (processed < pendingCount) {
+    while (attempted < pendingCount) {
       const batch = await db.sync_queue
         .where("status")
         .equals(QueueStatus.PENDING)
+        .filter(isRetryReady)
         .limit(CONFIG.batchSize)
         .toArray();
+      if (batch.length === 0) break;
 
       for (const item of batch) {
         try {
@@ -140,6 +156,7 @@ export async function attemptSync() {
           await handleSyncFailure(item, error);
           failed++;
         }
+        attempted++;
       }
     }
 
@@ -358,6 +375,11 @@ async function syncTransaction(supabase, item) {
   const idempotencyKey = item.idempotency_key;
 
   if (item.operation === SyncOperation.CREATE) {
+    if (data.type === "payment") {
+      const error = new Error("Payments entered offline were not synchronized. Confirm the payment online before recording it.");
+      error.code = "FINANCIAL_REVIEW_REQUIRED";
+      throw error;
+    }
     // Use RPC function with idempotency key
     const { data: result, error } = await supabase.rpc("create_transaction_offline", {
       p_idempotency_key: idempotencyKey,
@@ -567,6 +589,16 @@ async function syncClientInteraction(supabase, item) {
  * Handle sync failure with retry logic
  */
 async function handleSyncFailure(item, error) {
+  if (error.code === "FINANCIAL_REVIEW_REQUIRED") {
+    await db.sync_queue.update(item.id, {
+      status: QueueStatus.FAILED,
+      retry_count: item.retry_count || 0,
+      last_error: error.message,
+      last_attempt_at: new Date().toISOString(),
+    });
+    await createConflict(item, null, error.message);
+    return;
+  }
   const retryCount = (item.retry_count || 0) + 1;
 
   if (retryCount >= CONFIG.maxRetries) {
@@ -580,12 +612,13 @@ async function handleSyncFailure(item, error) {
   } else {
     // Exponential backoff
     const delay = CONFIG.retryDelay * Math.pow(CONFIG.retryBackoff, retryCount - 1);
+    const jitter = Math.random() * delay * 0.2;
     await db.sync_queue.update(item.id, {
       status: QueueStatus.PENDING,
       retry_count: retryCount,
       last_error: error.message,
       last_attempt_at: new Date().toISOString(),
-      next_retry_at: new Date(Date.now() + delay).toISOString(),
+      next_retry_at: new Date(Date.now() + delay + jitter).toISOString(),
     });
   }
 }

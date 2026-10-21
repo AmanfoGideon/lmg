@@ -16,10 +16,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stock = (int)($_POST['stock'] ?? 0);
     $min_stock = (int)($_POST['min_stock'] ?? 0);
     if ($name !== '') {
+      $conn->begin_transaction();
       $stmt = $conn->prepare("INSERT INTO products (name, sku, price, stock, min_stock) VALUES (?,?,?,?,?)");
       $stmt->bind_param('ssdii', $name, $sku, $price, $stock, $min_stock);
       $message = $stmt->execute() ? 'Product added' : 'Error adding product';
-      if ($message === 'Product added') { log_action($conn, 'product_create', $name); }
+      if ($message === 'Product added') {
+        log_action($conn, 'product_create', $name, [
+          'entity_id'=>(string)$stmt->insert_id,
+          'new_values'=>['name'=>$name,'sku'=>$sku,'price'=>$price,'stock'=>$stock,'min_stock'=>$min_stock]
+        ]);
+        $conn->commit();
+      } else { $conn->rollback(); }
       $stmt->close();
     } else {
       $message = 'Provide a name';
@@ -33,10 +40,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stock = (int)($_POST['stock'] ?? 0);
     $min_stock = (int)($_POST['min_stock'] ?? 0);
     if ($id > 0 && $name !== '') {
+      $beforeStmt = $conn->prepare("SELECT name,sku,price,stock,min_stock FROM products WHERE id=? LIMIT 1");
+      $beforeStmt->bind_param('i', $id);
+      $beforeStmt->execute();
+      $beforeResult = $beforeStmt->get_result();
+      $beforeProduct = $beforeResult->fetch_assoc() ?: null;
+      $beforeStmt->close();
+      $conn->begin_transaction();
       $stmt = $conn->prepare("UPDATE products SET name=?, sku=?, price=?, stock=?, min_stock=? WHERE id=?");
       $stmt->bind_param('ssdiii', $name, $sku, $price, $stock, $min_stock, $id);
       $message = $stmt->execute() ? 'Product updated' : 'Error updating product';
-      if ($message === 'Product updated') { log_action($conn, 'product_update', (string)$id); }
+      if ($message === 'Product updated' && $beforeProduct) {
+        log_action($conn, 'product_update', (string)$id, [
+          'entity_id'=>(string)$id,
+          'old_values'=>$beforeProduct,
+          'new_values'=>['name'=>$name,'sku'=>$sku,'price'=>$price,'stock'=>$stock,'min_stock'=>$min_stock]
+        ]);
+        $conn->commit();
+      } else { $conn->rollback(); }
       $stmt->close();
     } else {
       $message = 'Invalid product';
@@ -45,10 +66,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   if ($action === 'delete') {
     $id = (int)($_POST['id'] ?? 0);
     if ($id > 0) {
+      $beforeStmt = $conn->prepare("SELECT name,sku,price,stock,min_stock FROM products WHERE id=? LIMIT 1");
+      $beforeStmt->bind_param('i', $id);
+      $beforeStmt->execute();
+      $beforeResult = $beforeStmt->get_result();
+      $beforeProduct = $beforeResult->fetch_assoc() ?: null;
+      $beforeStmt->close();
+      $conn->begin_transaction();
       $stmt = $conn->prepare("DELETE FROM products WHERE id=?");
       $stmt->bind_param('i', $id);
       $message = $stmt->execute() ? 'Product deleted' : 'Error deleting product';
-      if ($message === 'Product deleted') { log_action($conn, 'product_delete', (string)$id); }
+      if ($message === 'Product deleted' && $beforeProduct) {
+        log_action($conn, 'product_delete', (string)$id, ['entity_id'=>(string)$id,'old_values'=>$beforeProduct]);
+        $conn->commit();
+      } else { $conn->rollback(); }
       $stmt->close();
     }
   }

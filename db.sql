@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   description TEXT,
   date DATE NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  request_key CHAR(32) NULL,
+  UNIQUE KEY uq_transactions_request_key (request_key),
   FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
 );
 
@@ -85,11 +87,13 @@ CREATE TABLE IF NOT EXISTS invoices (
   tax DECIMAL(10,2),
   total DECIMAL(10,2),
   notes TEXT,
+  request_key CHAR(32) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
 );
 
 CREATE UNIQUE INDEX idx_invoice_number ON invoices(invoice_number);
+CREATE UNIQUE INDEX uq_invoices_request_key ON invoices(request_key);
 CREATE INDEX idx_invoice_client ON invoices(client_id);
 
 -- Track invoice payment status for pending counts
@@ -181,6 +185,38 @@ CREATE TABLE IF NOT EXISTS user_logs (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+-- Structured, append-only activity history. References are snapshots without
+-- foreign keys so audit records remain after an associated user/entity is deleted.
+CREATE TABLE IF NOT EXISTS audit_events (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  event_uuid CHAR(32) NOT NULL,
+  actor_user_id INT NULL,
+  actor_name_snapshot VARCHAR(255) NOT NULL DEFAULT '',
+  actor_role_snapshot VARCHAR(100) NOT NULL DEFAULT '',
+  action VARCHAR(120) NOT NULL,
+  module VARCHAR(80) NOT NULL,
+  entity_type VARCHAR(80) NULL,
+  entity_id VARCHAR(100) NULL,
+  description VARCHAR(500) NOT NULL,
+  status VARCHAR(16) NOT NULL DEFAULT 'success',
+  old_values JSON NULL,
+  new_values JSON NULL,
+  metadata JSON NULL,
+  ip_address VARCHAR(45) NULL,
+  user_agent VARCHAR(255) NOT NULL DEFAULT '',
+  request_id VARCHAR(64) NOT NULL,
+  origin VARCHAR(40) NOT NULL DEFAULT 'web',
+  created_at DATETIME NOT NULL,
+  UNIQUE KEY uq_audit_event_uuid (event_uuid),
+  KEY idx_audit_created_id (created_at, id),
+  KEY idx_audit_actor_created (actor_user_id, created_at),
+  KEY idx_audit_action_created (action, created_at),
+  KEY idx_audit_module_created (module, created_at),
+  KEY idx_audit_entity (entity_type, entity_id),
+  KEY idx_audit_status_created (status, created_at),
+  KEY idx_audit_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =======================================
 -- 6) OPTIONAL: SAMPLE DATA

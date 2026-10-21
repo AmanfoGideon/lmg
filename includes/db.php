@@ -1,7 +1,7 @@
 <?php
 /**
  * Database connection bootstrap
- * - Loads credentials from environment or includes.env (fallback to legacy values)
+ * - Loads credentials from the process environment or a local env file
  * - Uses utf8mb4 and strict error reporting
  */
 declare(strict_types=1);
@@ -42,9 +42,15 @@ function env_var(string $key, ?string $default = null): ?string {
 }
 
 $host = env_var('DB_HOST', 'localhost');
-$user = env_var('DB_USER', 'Hepagk');
-$pass = env_var('DB_PASSWORD', 'Akoben210252');
-$dbname = env_var('DB_NAME', 'lmg_cm');
+$user = env_var('DB_USER');
+$pass = env_var('DB_PASSWORD', '');
+$dbname = env_var('DB_NAME');
+
+if ($user === null || $user === '' || $dbname === null || $dbname === '') {
+  error_log('Database configuration is incomplete; set DB_USER and DB_NAME.');
+  http_response_code(500);
+  die('Database connection failed');
+}
 
 try {
   $conn = new mysqli($host, $user, $pass, $dbname);

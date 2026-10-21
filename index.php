@@ -34,6 +34,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $error = "Your account is disabled. Please contact admin.";
         } elseif ($hashed_password !== null && password_verify($password, $hashed_password)) {
 
+            session_regenerate_id(true);
             $_SESSION["user_id"] = $id;
             $_SESSION["full_name"] = $full_name;
             $_SESSION["role"] = $role;

@@ -105,53 +105,52 @@ for ($i=6; $i>=0; $i--) {
 $labels = [];
 $incomeSeries = [];
 $expenseSeries = [];
-if ($period === 'year') {
-  $chartLabel = 'This Year (Jan–Dec)';
-  $year = date('Y');
-  for ($m=1; $m<=12; $m++) {
-    $labels[] = date('M', strtotime("{$year}-{$m}-01"));
-    $start = date('Y-m-01', strtotime("{$year}-{$m}-01"));
-    $end = date('Y-m-t', strtotime($start));
-    $stmt = $conn->prepare("SELECT
-      COALESCE(SUM(CASE WHEN type IN ('income','payment') THEN amount END),0) AS income_total,
-      COALESCE(SUM(CASE WHEN type='expense' THEN amount END),0) AS expense_total
-      FROM transactions WHERE date BETWEEN ? AND ?");
-    $stmt->bind_param('ss', $start, $end);
-    $stmt->execute();
-    $rs = $stmt->get_result();
-    $row = $rs->fetch_assoc();
-    $incomeSeries[] = (float)($row['income_total'] ?? 0.0);
-    $expenseSeries[] = (float)($row['expense_total'] ?? 0.0);
-    $stmt->close();
-  }
-}
-else if ($period === 'week') {
+if ($period === 'week') {
   $chartLabel = 'Last 7 days (daily)';
   $labels = $weeklyLabels;
   $incomeSeries = $weeklyIncomeSeries;
   $expenseSeries = $weeklyExpenseSeries;
-}
-else {
-  $chartLabel = 'Last 12 months';
-  for ($i=11; $i>=0; $i--) {
-    $ym = date('Y-m', strtotime("-{$i} months"));
-    $labels[] = date('M', strtotime("-{$i} months"));
-    $start = $ym.'-01';
-    $end = date('Y-m-t', strtotime($start));
-    $stmt = $conn->prepare("SELECT
-      COALESCE(SUM(CASE WHEN type IN ('income','payment') THEN amount END),0) AS income_total,
-      COALESCE(SUM(CASE WHEN type='expense' THEN amount END),0) AS expense_total
-      FROM transactions WHERE date BETWEEN ? AND ?");
-    $stmt->bind_param('ss', $start, $end);
-    $stmt->execute();
-    $rs = $stmt->get_result();
-    $row = $rs->fetch_assoc();
-    $incomeSeries[] = (float)($row['income_total'] ?? 0.0);
-    $expenseSeries[] = (float)($row['expense_total'] ?? 0.0);
-    $stmt->close();
+} else {
+  if ($period === 'year') {
+    $chartLabel = 'This Year (Jan–Dec)';
+    $year = date('Y');
+    $chartStart = $year.'-01-01';
+    $chartEnd = $year.'-12-31';
+    $firstMonth = strtotime($chartStart);
+  } else {
+    $chartLabel = 'Last 12 months';
+    $firstMonth = strtotime(date('Y-m-01').' -11 months');
+    $chartStart = date('Y-m-01', $firstMonth);
+    $chartEnd = date('Y-m-t');
+  }
+
+  $stmtChart = $conn->prepare("SELECT DATE_FORMAT(date, '%Y-%m') AS month_key,
+      COALESCE(SUM(CASE WHEN type IN ('income','payment') THEN amount ELSE 0 END),0) AS income_total,
+      COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) AS expense_total
+      FROM transactions
+      WHERE date BETWEEN ? AND ?
+      GROUP BY month_key");
+  $stmtChart->bind_param('ss', $chartStart, $chartEnd);
+  $stmtChart->execute();
+  $chartRows = $stmtChart->get_result();
+  $monthlyTotals = [];
+  while ($chartRow = $chartRows->fetch_assoc()) {
+    $monthlyTotals[$chartRow['month_key']] = [
+      'income' => (float)$chartRow['income_total'],
+      'expense' => (float)$chartRow['expense_total'],
+    ];
+  }
+  $stmtChart->close();
+
+  for ($i = 0; $i < 12; $i++) {
+    $monthDate = strtotime("+{$i} months", $firstMonth);
+    $monthKey = date('Y-m', $monthDate);
+    $labels[] = date('M', $monthDate);
+    $totals = $monthlyTotals[$monthKey] ?? ['income' => 0.0, 'expense' => 0.0];
+    $incomeSeries[] = $totals['income'];
+    $expenseSeries[] = $totals['expense'];
   }
 }
-
 $hasProducts = $conn->query("SHOW TABLES LIKE 'products'")->num_rows > 0;
 $lowStockCount = 0;
 $lowProducts = [];

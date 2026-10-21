@@ -2,91 +2,94 @@
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
 require_once "../includes/log.php";
+require_once "../includes/invoice.php";
 
 $userName = htmlspecialchars($_SESSION['full_name']);
 $role = $_SESSION['role'] ?? 'staff';
 $message = '';
+$requestKey = bin2hex(random_bytes(16));
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   if (!csrf_verify()) {
     $message = 'Invalid request token';
   } else {
-  $client_id = (int)($_POST['client_id'] ?? 0);
-  $client_name = trim($_POST['client_name'] ?? '');
-  if ($client_id <= 0 && $client_name !== '') {
-    $find = $conn->prepare("SELECT id FROM clients WHERE full_name=? LIMIT 1");
-    $find->bind_param('s', $client_name);
-    $find->execute();
-    $find->bind_result($foundId);
-    if ($find->fetch()) { $client_id = (int)$foundId; }
-    $find->close();
-    if ($client_id <= 0) {
-      $ins = $conn->prepare("INSERT INTO clients (full_name, phone, email, address) VALUES (?,?,?,?)");
-      $empty = '';
-      $ins->bind_param('ssss', $client_name, $empty, $empty, $empty);
-      if ($ins->execute()) { $client_id = $ins->insert_id; }
-      $ins->close();
-    }
-  }
-  $invoice_date = $_POST['invoice_date'] ?? date('Y-m-d');
-  $due_date = $_POST['due_date'] ?? null;
-  $tax = (float)($_POST['tax'] ?? 0);
-  $itemsRaw = $_POST['items'] ?? '[]';
-  $items = is_string($itemsRaw) ? json_decode($itemsRaw, true) : $itemsRaw;
-  if (!is_array($items)) { $items = []; }
+    $client_id = (int)($_POST['client_id'] ?? 0);
+    $client_name = trim((string)($_POST['client_name'] ?? ''));
+    $invoice_date = (string)($_POST['invoice_date'] ?? date('Y-m-d'));
+    $due_date = (string)($_POST['due_date'] ?? '');
+    $notes = trim((string)($_POST['notes'] ?? ''));
+    $requestKey = (string)($_POST['request_key'] ?? '');
+    $rawItems = json_decode((string)($_POST['items'] ?? '[]'), true);
+    try {
+      if (!invoice_valid_date($invoice_date) || !invoice_valid_date($due_date, true)) throw new InvalidArgumentException('Enter valid invoice and due dates.');
+      if (!preg_match('/^[a-f0-9]{32}$/', $requestKey)) throw new InvalidArgumentException('Reload the page before submitting this invoice.');
+      $calculation = invoice_calculate(is_array($rawItems) ? $rawItems : [], $_POST['tax'] ?? '0');
+      if ($client_id <= 0 && $client_name === '') throw new InvalidArgumentException('Please provide a client and at least one item.');
+      if (strlen($notes) > 65000) throw new InvalidArgumentException('Notes are too long.');
 
-  $subtotal = 0;
-  $parsed = [];
-  foreach ($items as $it) {
-    $name = trim($it['name'] ?? '');
-    $qty = (int)($it['qty'] ?? 0);
-    $price = (float)($it['price'] ?? 0);
-    if ($name !== '' && $qty > 0 && $price >= 0) {
-      $lineTotal = $qty * $price;
-      $subtotal += $lineTotal;
-      $parsed[] = ['name'=>$name,'qty'=>$qty,'price'=>$price,'total'=>$lineTotal];
-    }
-  }
-  $total = $subtotal + $tax;
-
-  if ($client_id > 0 && count($parsed) > 0) {
-    $nextId = (int)$conn->query("SELECT COALESCE(MAX(id),0)+1 AS next FROM invoices")->fetch_assoc()['next'];
-    $invoice_number = "INV-" . date("Ymd", strtotime($invoice_date)) . "-" . str_pad($nextId, 4, "0", STR_PAD_LEFT);
-    $stmt = $conn->prepare("INSERT INTO invoices (invoice_number, client_id, invoice_date, due_date, subtotal, tax, total, notes, status) VALUES (?,?,?,?,?,?,?,?, 'unpaid')");
-    $notes = trim($_POST['notes'] ?? '');
-    $stmt->bind_param('sissddds', $invoice_number, $client_id, $invoice_date, $due_date, $subtotal, $tax, $total, $notes);
-    if ($stmt->execute()) {
-      $invoice_id = $stmt->insert_id;
-      $stmt->close();
-      $istmt = $conn->prepare("INSERT INTO invoice_items (invoice_id, item_name, quantity, price, total) VALUES (?,?,?,?,?)");
-      foreach ($parsed as $p) {
-        $istmt->bind_param('isidd', $invoice_id, $p['name'], $p['qty'], $p['price'], $p['total']);
-        $istmt->execute();
+      $conn->begin_transaction();
+      $existingInvoice = $conn->prepare('SELECT id FROM invoices WHERE request_key=? LIMIT 1');
+      $existingInvoice->bind_param('s', $requestKey);
+      $existingInvoice->execute();
+      $existingRow = $existingInvoice->get_result()->fetch_assoc();
+      $existingInvoice->close();
+      if ($existingRow) {
+        $conn->rollback();
+        header('Location: invoice_view.php?id='.(int)$existingRow['id']);
+        exit;
       }
-      $istmt->close();
-      if ($conn->query("SHOW TABLES LIKE 'products'")->num_rows > 0) {
-        $up = $conn->prepare("UPDATE products SET stock = GREATEST(stock - ?, 0) WHERE name = ?");
-        foreach ($parsed as $p) {
-          $qty = (int)$p['qty'];
-          $name = (string)$p['name'];
-          $up->bind_param('is', $qty, $name);
-          $up->execute();
+      if ($client_id > 0) {
+        $checkClient = $conn->prepare('SELECT id FROM clients WHERE id=? LIMIT 1');
+        $checkClient->bind_param('i', $client_id);
+        $checkClient->execute();
+        $validClient = (bool)$checkClient->get_result()->fetch_row();
+        $checkClient->close();
+        if (!$validClient) throw new InvalidArgumentException('Select a valid client.');
+      } else {
+        $find = $conn->prepare('SELECT id FROM clients WHERE full_name=? ORDER BY id LIMIT 1');
+        $find->bind_param('s', $client_name);
+        $find->execute();
+        $existing = $find->get_result()->fetch_assoc();
+        $find->close();
+        if ($existing) {
+          $client_id = (int)$existing['id'];
+        } else {
+          $empty = '';
+          $ins = $conn->prepare('INSERT INTO clients (full_name, phone, email, address) VALUES (?,?,?,?)');
+          $ins->bind_param('ssss', $client_name, $empty, $empty, $empty);
+          $ins->execute();
+          $client_id = (int)$ins->insert_id;
+          $ins->close();
+          log_action($conn, 'client_create', $client_name, ['entity_id'=>(string)$client_id,'new_values'=>['full_name'=>$client_name]]);
         }
-        $up->close();
       }
-      log_action($conn, 'invoice_create', $invoice_number);
-      header("Location: invoice_view.php?id=".$invoice_id);
+      $invoice_id = invoice_insert($conn, ['client_id'=>$client_id,'invoice_date'=>$invoice_date,'due_date'=>$due_date,'notes'=>$notes,'request_key'=>$requestKey], $calculation);
+      $invoice_number = 'INV-'.str_replace('-', '', $invoice_date).'-'.str_pad((string)$invoice_id, 4, '0', STR_PAD_LEFT);
+      log_action($conn, 'invoice_create', $invoice_number, [
+        'entity_id'=>(string)$invoice_id,
+        'new_values'=>['invoice_number'=>$invoice_number,'client_id'=>$client_id,'invoice_date'=>$invoice_date,'due_date'=>$due_date ?: null,'subtotal'=>$calculation['subtotal'],'tax'=>$calculation['tax'],'total'=>$calculation['total'],'status'=>'unpaid','item_count'=>count($calculation['items'])]
+      ]);
+      $conn->commit();
+      header('Location: invoice_view.php?id='.$invoice_id);
       exit;
-    } else {
-      $message = 'Error creating invoice';
-      $stmt->close();
+    } catch (InvalidArgumentException $e) {
+      try { $conn->rollback(); } catch (Throwable $ignored) {}
+      $message = $e->getMessage();
+    } catch (Throwable $e) {
+      try { $conn->rollback(); } catch (Throwable $ignored) {}
+      if (preg_match('/^[a-f0-9]{32}$/', $requestKey)) {
+        $retry = $conn->prepare('SELECT id FROM invoices WHERE request_key=? LIMIT 1');
+        $retry->bind_param('s', $requestKey);
+        $retry->execute();
+        $retryRow = $retry->get_result()->fetch_assoc();
+        $retry->close();
+        if ($retryRow) { header('Location: invoice_view.php?id='.(int)$retryRow['id']); exit; }
+      }
+      $message = 'Invoice could not be saved. Please try again.';
+      error_log('Invoice creation failed: '.$e->getMessage());
     }
-  } else {
-    $message = 'Please provide client and at least one item';
-  }
   }
 }
-
 $clients = $conn->query("SELECT id, full_name FROM clients ORDER BY full_name ASC");
 $clientsArr = [];
 while ($cRow = $clients->fetch_assoc()) { $clientsArr[] = $cRow; }
@@ -119,6 +122,7 @@ while ($cRow = $clients->fetch_assoc()) { $clientsArr[] = $cRow; }
     <div class="card p-3 invoice-card">
       <form method="POST" id="invoiceForm">
         <?= csrf_input() ?>
+        <input type="hidden" name="request_key" value="<?= htmlspecialchars($requestKey, ENT_QUOTES) ?>">
         <div class="row g-3">
           <div class="col-lg-4">
             <label class="form-label">Client</label>

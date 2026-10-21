@@ -5,6 +5,10 @@ require_once "../includes/log.php";
 
 $role = $_SESSION['role'] ?? 'staff';
 if ($role !== 'admin') {
+    audit_event($conn, [
+        'action' => 'security.users_access.denied', 'module' => 'users', 'status' => 'denied',
+        'description' => 'A user without administrator access tried to open user management.'
+    ]);
     header('Location: dashboard.php');
     exit;
 }
@@ -22,38 +26,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $roleP = $_POST['role'] === 'admin' ? 'admin' : 'staff';
         $status = $_POST['status'] === 'inactive' ? 'inactive' : 'active';
         $branchVal = trim($_POST['branch'] ?? '');
+        $conn->begin_transaction();
         $stmt = $conn->prepare("INSERT INTO users (full_name, username, password, role, status) VALUES (?,?,?,?,?)");
         $stmt->bind_param('sssss', $full_name, $username, $password, $roleP, $status);
         $message = $stmt->execute() ? 'User created' : 'Error creating user';
-        if ($message === 'User created') { log_action($conn, 'user_create', $username); }
+        $newUserId = (int)$stmt->insert_id;
         $stmt->close();
         if ($message === 'User created' && $branchVal !== '' && $conn->query("SHOW COLUMNS FROM users LIKE 'branch'")->num_rows > 0) {
-            $uidNew = (int)$conn->insert_id;
+            $uidNew = $newUserId;
             $up = $conn->prepare("UPDATE users SET branch=? WHERE id=?");
             $up->bind_param('si', $branchVal, $uidNew);
             $up->execute();
             $up->close();
         }
+        if ($message === 'User created') {
+            log_action($conn, 'user_create', $username, [
+                'entity_id' => (string)$newUserId,
+                'new_values' => ['full_name'=>$full_name,'username'=>$username,'role'=>$roleP,'status'=>$status,'branch'=>$branchVal]
+            ]);
+            $conn->commit();
+        } else { $conn->rollback(); }
     }
     if ($action === 'update_status') {
         $uid = (int)$_POST['id'];
         $status = $_POST['status'] === 'inactive' ? 'inactive' : 'active';
+        $beforeStmt = $conn->prepare("SELECT full_name, username, role, status FROM users WHERE id=? LIMIT 1");
+        $beforeStmt->bind_param('i', $uid);
+        $beforeStmt->execute();
+        $beforeResult = $beforeStmt->get_result();
+        $beforeUser = $beforeResult->fetch_assoc() ?: null;
+        $beforeStmt->close();
+        $conn->begin_transaction();
         $stmt = $conn->prepare("UPDATE users SET status=? WHERE id=?");
         $stmt->bind_param('si', $status, $uid);
         $message = $stmt->execute() ? 'Status updated' : 'Error updating status';
-        if ($message === 'Status updated') { log_action($conn, 'user_status', (string)$uid.'->'.$status); }
+        if ($message === 'Status updated' && $beforeUser) {
+            log_action($conn, 'user_status', (string)$uid.'->'.$status, [
+                'entity_id' => (string)$uid,
+                'old_values' => $beforeUser,
+                'new_values' => ['status'=>$status]
+            ]);
+            $conn->commit();
+        } else { $conn->rollback(); }
         $stmt->close();
     }
     if ($action === 'delete') {
         $uid = (int)$_POST['id'];
         if ($uid !== (int)($_SESSION['user_id'])) {
+            $beforeStmt = $conn->prepare("SELECT full_name, username, role, status FROM users WHERE id=? LIMIT 1");
+            $beforeStmt->bind_param('i', $uid);
+            $beforeStmt->execute();
+            $beforeResult = $beforeStmt->get_result();
+            $beforeUser = $beforeResult->fetch_assoc() ?: null;
+            $beforeStmt->close();
+            $conn->begin_transaction();
             $stmt = $conn->prepare("DELETE FROM users WHERE id=?");
             $stmt->bind_param('i', $uid);
             $message = $stmt->execute() ? 'User deleted' : 'Error deleting user';
-            if ($message === 'User deleted') { log_action($conn, 'user_delete', (string)$uid); }
+            if ($message === 'User deleted' && $beforeUser) {
+                log_action($conn, 'user_delete', (string)$uid, ['entity_id'=>(string)$uid,'old_values'=>$beforeUser]);
+                $conn->commit();
+            } else { $conn->rollback(); }
             $stmt->close();
         } else {
             $message = 'Cannot delete current user';
+            audit_event($conn, [
+                'action' => 'security.user_delete.denied', 'module' => 'users', 'status' => 'denied',
+                'entity_type' => 'user', 'entity_id' => (string)$uid,
+                'description' => 'Administrator tried to delete their own account.'
+            ]);
         }
     }
     }

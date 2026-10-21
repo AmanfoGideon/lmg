@@ -10,7 +10,6 @@ import {
   recordInvoicePayment,
   sendInvoiceEmail,
   sendSms,
-  setInvoiceStatus,
 } from "./data.js";
 import { setEmptyRow, setFormBusy, showNotice } from "./feedback.js";
 
@@ -33,6 +32,10 @@ function makeOption(value, label) {
   return option;
 }
 
+function makeRequestKey() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 function invoiceRow(invoice) {
   const row = document.createElement("tr");
   [invoice.invoice_number, invoice.clients?.full_name || "", invoice.invoice_date, invoice.due_date || "", currency(invoice.total)].forEach((value) => {
@@ -53,25 +56,7 @@ function invoiceRow(invoice) {
   view.type = "button";
   view.textContent = "View";
   view.addEventListener("click", () => showInvoice(invoice.id));
-  const statusSelect = document.createElement("select");
-  statusSelect.className = "form-select form-select-sm";
-  ["unpaid", "partial", "paid"].forEach((value) => statusSelect.append(makeOption(value, value)));
-  statusSelect.value = invoice.status;
-  statusSelect.setAttribute("aria-label", `Status for ${invoice.invoice_number}`);
-  statusSelect.addEventListener("change", async () => {
-    statusSelect.disabled = true;
-    try {
-      await setInvoiceStatus(invoice.id, statusSelect.value);
-      showNotice("Invoice status updated.");
-      await loadInvoices();
-    } catch (error) {
-      statusSelect.value = invoice.status;
-      showNotice(error.message || "Unable to update status.", "danger");
-    } finally {
-      statusSelect.disabled = false;
-    }
-  });
-  actions.append(view, statusSelect);
+  actions.append(view);
   row.append(actions);
   return row;
 }
@@ -289,6 +274,7 @@ async function showInvoice(id) {
     form.className = "row g-2 align-items-end";
     form.innerHTML = `<input type="hidden" name="invoice_id" value="${invoice.id}"><div class="col-md-3"><label class="form-label" for="paymentAmount">Payment amount</label><input class="form-control" id="paymentAmount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="col-md-3"><label class="form-label" for="paymentMethod">Method</label><select class="form-select" id="paymentMethod" name="payment_method"><option value="">Not specified</option><option value="cash">Cash</option><option value="mobile">Mobile</option><option value="card">Card</option></select></div><div class="col-md-3"><label class="form-label" for="paymentDate">Date</label><input class="form-control" id="paymentDate" name="date" type="date" required></div><div class="col-md-3"><button class="btn btn-primary" type="submit">Record Payment</button></div>`;
     form.elements.date.value = new Date().toISOString().slice(0, 10);
+    let paymentRequestKey = makeRequestKey();
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       setFormBusy(form, true);
@@ -300,7 +286,9 @@ async function showInvoice(id) {
           paymentMethod: values.payment_method,
           description: "Invoice payment",
           date: values.date,
+          requestKey: paymentRequestKey,
         });
+        paymentRequestKey = makeRequestKey();
         showNotice("Payment recorded. Invoice status updated.");
         await loadInvoices();
         await showInvoice(invoice.id);
@@ -391,6 +379,7 @@ export async function initInvoices() {
   document.getElementById("invoiceDate").value = new Date().toISOString().slice(0, 10);
 
   const form = document.getElementById("invoiceForm");
+  let invoiceRequestKey = makeRequestKey();
   form.addEventListener("reset", () => {
     newClientWrap.classList.add("d-none");
     newClientInput.required = false;
@@ -406,6 +395,7 @@ export async function initInvoices() {
         price: Number(row.querySelector("[name='price']").value),
       }));
       await createInvoice({
+        requestKey: invoiceRequestKey,
         clientId: values.client_id === "__new__" ? null : Number(values.client_id),
         clientName: values.client_id === "__new__" ? values.client_name.trim() : null,
         invoiceDate: values.invoice_date,
@@ -414,6 +404,7 @@ export async function initInvoices() {
         notes: values.notes,
         items,
       });
+      invoiceRequestKey = makeRequestKey();
       if (values.client_id === "__new__") window.dispatchEvent(new Event("lmg:clients-changed"));
       window.dispatchEvent(new Event("lmg:invoices-changed"));
       form.reset();

@@ -61,7 +61,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       }
       $message = ($sent>0 ? "Sent {$sent}" : "").($sent>0 && $failed>0 ? ", " : "").($failed>0 ? "Failed {$failed}" : "");
       if ($message === '') { $message = 'No messages processed'; }
-      log_action($conn, 'sms_send', (string)$sent.'|'.(string)$failed);
+      log_action($conn, 'sms_send', (string)$sent.'|'.(string)$failed, [
+        'status' => $failed > 0 ? 'failure' : 'success',
+        'metadata' => ['sent'=>$sent,'failed'=>$failed]
+      ]);
     }
   }
   if ($action === 'send_bulk') {
@@ -114,7 +117,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       } else {
         $message = "Bulk SMS: Sent {$sent}, Failed {$failed}";
       }
-      log_action($conn, 'sms_bulk_send', (string)$sent.'|'.(string)$failed);
+      log_action($conn, 'sms_bulk_send', (string)$sent.'|'.(string)$failed, [
+        'status' => $failed > 0 ? 'failure' : 'success',
+        'metadata' => ['sent'=>$sent,'queued'=>$queued,'failed'=>$failed]
+      ]);
     }
   }
   if ($action === 'check_connectivity') {

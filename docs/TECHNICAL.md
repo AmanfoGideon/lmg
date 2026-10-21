@@ -12,11 +12,11 @@
 - See `docs/MIGRATION_CHECKLIST.md` for feature mapping and current blockers, and `docs/SUPABASE_DEPLOYMENT.md` for setup and cutover steps.
 
 ## Configuration
-- Environment file: `includes.env` supports keys:
+- Configure database and provider values in the process environment, root `.env`, or `includes.env` (keep these files private):
   - DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
   - CURRENCY_SYMBOL (e.g., $, €, ₦, £, ₵)
   - SMSONLINE_API_KEY, SMSONLINE_HOST, SMSONLINE_SENDER, DEFAULT_DIAL_CODE
-- Database config loads from env with fallback defaults. Charset: `utf8mb4`.
+- Database host defaults to `localhost`; database username and name must be configured. No credentials are embedded in application code. Charset: `utf8mb4`.
 
 ## Security
 - Sessions hardened: HttpOnly, Secure (on HTTPS), SameSite=Lax
@@ -57,12 +57,27 @@
 - Message logging into `sms_messages` table when present
 
 ## Database
-- Core tables: users, clients, transactions, invoices, invoice_items, products, user_logs, sms_messages, client_interactions
+- Core tables: users, clients, transactions, invoices, invoice_items, products, user_logs, audit_events, sms_messages, client_interactions
+- Invoice integrity update: after taking a database backup, apply `migrations/20261020_invoice_integrity.sql` before deploying the PHP invoice code. It adds nullable unique request keys for new invoices and payment transactions; existing rows and invoice numbers are retained. `db.sql` contains the same fields for new installations. The optional Supabase build also needs `supabase/migrations/202610200001_invoice_integrity.sql` after its existing migrations; that deployment remains unvalidated per the migration checklist.
+- Invoice amounts use integer cents for server-side calculation and are stored as exact decimal strings. Tax remains the existing fixed amount; this application has no configurable rate or discount rules. Invoice status is derived from linked payment transactions. Linked invoice payments cannot be edited or deleted through Transactions; the app has no refund/reversal or cancellation workflow yet.
+- Invoice numbers retain `INV-YYYYMMDD-{id}` and are finalized from the database auto-increment ID in the same transaction as invoice/items. Payment request keys prevent form retries from duplicating income transactions. Receipts remain transaction-backed and use the transaction ID, with no separate receipt record.
 - Recommended indexes (if not already present):
   - transactions(type, date), transactions(client_id), transactions(invoice_id)
   - invoices(client_id, invoice_date, status)
   - sms_messages(created_at, status)
   - clients(full_name), products(name, sku)
+
+## Audit Trail
+- Apply `migrations/20261020_audit_events.sql` before deploying the PHP changes. `db.sql` also creates the additive table for new installations.
+- Administrators can review filtered and paginated events at `/public/audit_logs.php`; access is checked against the current active `admin` role on every request.
+- The server creates audit records. Existing `log_action()` calls continue writing to `user_logs` and are mirrored to structured `audit_events`; authentication, transaction, client, invoice, user, and receipt paths add structured context, with before/after values for supported updates.
+- Audit records have no user/entity foreign keys, so deleting related records does not cascade into event history. The application exposes no audit edit/delete controls. Database administrators can still alter records; this is not immutable or tamper-proof storage.
+- Audit CSV export respects active filters and is capped at 10,000 rows. Backup exports include `audit_events`. No records are automatically purged; define and approve a retention period before adding archival or purge automation.
+- Event times are stored in UTC and shown in the PHP server's configured timezone. IP addresses and user-agent strings are included for investigation and should be handled under the organization's privacy policy.
+- Critical transaction create/update/delete and invoice/payment changes write their audit rows inside the same MySQL transaction as the business update. Other legacy modules use the central logger after the operation; apply the migration before using those paths with this release.
+
+## Performance Notes
+- Dashboard 12-month and calendar-year charts aggregate transactions in one date-bounded query rather than one query per month. The weekly chart and other dashboard totals retain their existing query paths.
 
 ## PWA
 - Manifest and service worker registered across pages
@@ -76,6 +91,8 @@
 - Prefer shared helpers (currency, CSRF, env) loaded through includes
 
 ## Testing and Validation
+- Invoice calculation unit tests: `php tests/php/invoice_calculation_test.php`.
+- Invoice PHP/JavaScript syntax checks: `php -l <file>` and `node --check <file>`; apply the database migrations and run a non-production MariaDB/Supabase integration suite before deployment.
 - Login: CSRF check and credential verification
 - Forms: CSRF token required; sanitized inputs
 - Charts: data integrity verified server-side; client uses immutable datasets

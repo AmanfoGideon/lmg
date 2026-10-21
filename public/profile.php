@@ -1,15 +1,26 @@
 <?php
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
+require_once "../includes/log.php";
 
 $uid = (int)$_SESSION['user_id'];
 $message = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!csrf_verify()) {
+        $message = 'Invalid request token';
+    } else {
     $full_name = trim($_POST['full_name'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
     $pass = trim($_POST['password'] ?? '');
+    $beforeStmt = $conn->prepare("SELECT full_name,email,phone FROM users WHERE id=? LIMIT 1");
+    $beforeStmt->bind_param('i', $uid);
+    $beforeStmt->execute();
+    $beforeStmt->bind_result($oldName, $oldEmail, $oldPhone);
+    $hasUser = $beforeStmt->fetch();
+    $beforeStmt->close();
+    $conn->begin_transaction();
 
     if ($pass !== '') {
         $hash = password_hash($pass, PASSWORD_DEFAULT);
@@ -20,12 +31,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->bind_param('sssi', $full_name, $email, $phone, $uid);
     }
     if ($stmt->execute()) {
-        $_SESSION['full_name'] = $full_name;
         $message = 'Profile updated';
+        audit_event($conn, [
+            'action' => 'user.profile.updated', 'module' => 'users', 'entity_type' => 'user', 'entity_id' => (string)$uid,
+            'description' => 'User profile details updated.',
+            'old_values' => $hasUser ? ['full_name'=>$oldName,'email'=>$oldEmail,'phone'=>$oldPhone] : null,
+            'new_values' => ['full_name'=>$full_name,'email'=>$email,'phone'=>$phone]
+        ]);
+        if ($pass !== '') {
+            audit_event($conn, [
+                'action' => 'auth.password.changed', 'module' => 'authentication',
+                'entity_type' => 'user', 'entity_id' => (string)$uid,
+                'description' => 'User changed account password.'
+            ]);
+        }
+        $conn->commit();
+        $_SESSION['full_name'] = $full_name;
     } else {
+        $conn->rollback();
         $message = 'Error updating profile';
     }
     $stmt->close();
+    }
 }
 
 $stmt = $conn->prepare("SELECT full_name, username, email, phone, role FROM users WHERE id=? LIMIT 1");
@@ -62,6 +89,7 @@ $stmt->close();
 
     <div class="card p-3">
       <form method="POST" class="row g-3">
+        <?= csrf_input() ?>
         <div class="col-md-6">
           <label class="form-label">Full Name</label>
           <input class="form-control" name="full_name" value="<?= htmlspecialchars($full_name ?? '') ?>" required>
