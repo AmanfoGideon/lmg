@@ -67,24 +67,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($paidCents === null || $totalCents === null) throw new RuntimeException('Invoice payment totals are invalid.');
         $paymentStatus = $paidCents <= 0 ? 'unpaid' : ($paidCents < $totalCents ? 'partial' : 'paid');
 
-        if ($paidCents > 0) {
-          $reason = trim((string)($_POST['cancellation_reason'] ?? ''));
-          $reasonLength = preg_match_all('/./us', $reason);
-          if ($reasonLength === false || $reasonLength < 3 || $reasonLength > 500) throw new InvalidArgumentException('Enter a cancellation reason between 3 and 500 characters.');
-          $cancel = $conn->prepare('UPDATE invoices SET cancelled_at=NOW(), cancelled_by=?, cancellation_reason=? WHERE id=? AND cancelled_at IS NULL');
-          $actorId = (int)($_SESSION['user_id'] ?? 0);
-          $cancel->bind_param('isi', $actorId, $reason, $invoiceId);
-          $cancel->execute();
-          if ($cancel->affected_rows !== 1) throw new InvalidArgumentException('This invoice has already been cancelled.');
-          $cancel->close();
-          log_action($conn, 'invoice_cancel', (string)$invoice['invoice_number'], [
-            'entity_id'=>(string)$invoiceId,
-            'old_values'=>['status'=>$paymentStatus,'total'=>(string)$invoice['total'],'paid_total'=>(string)$invoice['paid_total'],'cancelled_at'=>null],
-            'new_values'=>['status'=>'cancelled','payment_status'=>$paymentStatus,'total'=>(string)$invoice['total'],'paid_total'=>(string)$invoice['paid_total'],'reason'=>$reason]
-          ]);
-          $conn->commit();
-          $message = 'Invoice cancelled. Its payments, receipts, and audit history were retained.';
-        } else {
         if ($conn->query("SHOW TABLES LIKE 'products'")->num_rows > 0) {
           $inventory = $conn->prepare('SELECT ii.id FROM invoice_items ii JOIN products p ON LOWER(p.name)=LOWER(ii.item_name) WHERE ii.invoice_id=? LIMIT 1');
           $inventory->bind_param('i', $invoiceId);
@@ -100,11 +82,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $delete->close();
         log_action($conn, 'invoice_delete', (string)$invoice['invoice_number'], [
           'entity_id'=>(string)$invoiceId,
-          'old_values'=>['invoice_number'=>$invoice['invoice_number'],'client_id'=>(int)$invoice['client_id'],'total'=>(string)$invoice['total'],'status'=>'unpaid']
+          'old_values'=>['invoice_number'=>$invoice['invoice_number'],'client_id'=>(int)$invoice['client_id'],'total'=>(string)$invoice['total'],'status'=>$paymentStatus,'paid_total'=>(string)$invoice['paid_total']]
         ]);
         $conn->commit();
         $message = 'Invoice deleted';
-        }
       } catch (InvalidArgumentException $e) {
         try { $conn->rollback(); } catch (Throwable $ignored) {}
         $message = $e->getMessage();
@@ -216,7 +197,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                       <?= csrf_input() ?>
                       <input type="hidden" name="action" value="delete">
                       <input type="hidden" name="invoice_id" value="<?= (int)$i['id'] ?>">
-                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete or cancel invoice"><?= $i['status'] === 'unpaid' ? 'Delete' : 'Cancel' ?></button>
+                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete invoice">Delete</button>
                     </form>
                   </td>
                 </tr>
@@ -238,25 +219,10 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     form.addEventListener('submit', function(event) {
       const invoiceLabel = `${form.dataset.invoiceNumber} for ${form.dataset.client}`;
       const status = form.dataset.paymentStatus;
-      if (status === 'unpaid') {
-        if (!window.confirm(`Delete unpaid invoice ${invoiceLabel}? This cannot be undone.`)) event.preventDefault();
-        return;
-      }
-      if (!window.confirm(`Cancel ${status} invoice ${invoiceLabel}? Its linked payments, receipts, and audit history will be retained.`)) {
+      if (!window.confirm(`Delete ${status} invoice ${invoiceLabel}? This will also delete linked payments. This cannot be undone.`)) {
         event.preventDefault();
         return;
       }
-      const reason = window.prompt('Enter the reason for cancelling this invoice (3 to 500 characters):');
-      if (reason === null || [...reason.trim()].length < 3 || [...reason.trim()].length > 500) {
-        event.preventDefault();
-        window.alert('A cancellation reason between 3 and 500 characters is required.');
-        return;
-      }
-      const input = document.createElement('input');
-      input.type = 'hidden';
-      input.name = 'cancellation_reason';
-      input.value = reason.trim();
-      form.append(input);
     });
   });
   jQuery(function($){

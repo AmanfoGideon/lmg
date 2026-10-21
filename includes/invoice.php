@@ -141,9 +141,6 @@ function invoice_update(mysqli $conn, int $invoiceId, array $invoice, array $cal
     $paidCents = invoice_money_cents($paidValue);
     if ($paidCents === null) throw new RuntimeException('Recorded payment total is outside the supported range.');
     $newTotalCents = (int)$calculation['total_cents'];
-    if ($newTotalCents < $paidCents) {
-      throw new InvalidArgumentException('The new invoice total is below the amount already paid. Resolve the excess payment before saving.');
-    }
     $oldTotalCents = invoice_money_cents((string)$existing['total']);
     if ($oldTotalCents === null) throw new RuntimeException('Invoice total is invalid.');
     if ($newTotalCents !== $oldTotalCents && !$confirmTotalChange) {
@@ -155,31 +152,6 @@ function invoice_update(mysqli $conn, int $invoiceId, array $invoice, array $cal
     $oldItemsStmt->execute();
     $oldItems = $oldItemsStmt->get_result()->fetch_all(MYSQLI_ASSOC);
     $oldItemsStmt->close();
-    $oldStockQuantities = [];
-    $newStockQuantities = [];
-    foreach ($oldItems as $item) {
-      $key = strtolower(trim((string)$item['item_name']));
-      $oldStockQuantities[$key] = ($oldStockQuantities[$key] ?? 0) + (int)$item['quantity'];
-    }
-    foreach ($calculation['items'] as $item) {
-      $key = strtolower(trim((string)$item['name']));
-      $newStockQuantities[$key] = ($newStockQuantities[$key] ?? 0) + (int)$item['qty'];
-    }
-    ksort($oldStockQuantities);
-    ksort($newStockQuantities);
-    if ($oldStockQuantities !== $newStockQuantities && $conn->query("SHOW TABLES LIKE 'products'")->num_rows > 0) {
-      $stockNames = array_unique(array_merge(array_keys($oldStockQuantities), array_keys($newStockQuantities)));
-      $productCheck = $conn->prepare('SELECT id FROM products WHERE LOWER(name)=? LIMIT 1');
-      foreach ($stockNames as $name) {
-        $productCheck->bind_param('s', $name);
-        $productCheck->execute();
-        if ($productCheck->get_result()->fetch_row()) {
-          $productCheck->close();
-          throw new InvalidArgumentException('Line items linked to inventory cannot be changed because their original stock movement is not recorded. Other invoice details can still be edited.');
-        }
-      }
-      $productCheck->close();
-    }
 
     $clientId = (int)$invoice['client_id'];
     $client = $conn->prepare('SELECT id FROM clients WHERE id=? LIMIT 1');
