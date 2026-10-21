@@ -124,14 +124,12 @@ create policy "Suppliers are viewable by all active members"
 create policy "Suppliers can be created by active members"
   on public.suppliers for insert
   to authenticated
-  with check (public.is_active_member())
-  and (created_by = auth.uid());
+  with check (public.is_active_member() and created_by = auth.uid());
 
 create policy "Suppliers can be updated by active members or creators"
   on public.suppliers for update
   to authenticated
-  using (public.is_active_member())
-  and (updated_by = auth.uid() or public.is_admin());
+  using (public.is_active_member() and (updated_by = auth.uid() or public.is_admin()));
 
 create policy "Suppliers can be deleted by admins only"
   on public.suppliers for delete
@@ -147,14 +145,12 @@ create policy "Supplier bills are viewable by all active members"
 create policy "Supplier bills can be created by active members"
   on public.supplier_bills for insert
   to authenticated
-  with check (public.is_active_member())
-  and (created_by = auth.uid());
+  with check (public.is_active_member() and created_by = auth.uid());
 
 create policy "Supplier bills can be updated by active members or creators"
   on public.supplier_bills for update
   to authenticated
-  using (public.is_active_member())
-  and (updated_by = auth.uid() or public.is_admin());
+  using (public.is_active_member() and (updated_by = auth.uid() or public.is_admin()));
 
 create policy "Supplier bills can be deleted by admins only"
   on public.supplier_bills for delete
@@ -170,14 +166,12 @@ create policy "Supplier payments are viewable by all active members"
 create policy "Supplier payments can be created by active members"
   on public.supplier_payments for insert
   to authenticated
-  with check (public.is_active_member())
-  and (created_by = auth.uid());
+  with check (public.is_active_member() and created_by = auth.uid());
 
 create policy "Supplier payments can be updated by active members or creators"
   on public.supplier_payments for update
   to authenticated
-  using (public.is_active_member())
-  and (updated_by = auth.uid() or public.is_admin());
+  using (public.is_active_member() and (updated_by = auth.uid() or public.is_admin()));
 
 create policy "Supplier payments can be deleted by admins only"
   on public.supplier_payments for delete
@@ -193,8 +187,7 @@ create policy "Payment allocations are viewable by all active members"
 create policy "Payment allocations can be created by active members"
   on public.supplier_payment_allocations for insert
   to authenticated
-  with check (public.is_active_member())
-  and (allocated_by = auth.uid());
+  with check (public.is_active_member() and allocated_by = auth.uid());
 
 create policy "Payment allocations can be deleted by admins only"
   on public.supplier_payment_allocations for delete
