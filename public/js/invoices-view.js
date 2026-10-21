@@ -11,11 +11,13 @@ import {
   recordInvoicePayment,
   sendInvoiceEmail,
   sendSms,
+  updateInvoice,
 } from "./data.js";
 import { setEmptyRow, setFormBusy, showNotice } from "./feedback.js";
 
 let invoices = [];
 let clients = [];
+let editingInvoiceId = null;
 const currencySymbol = globalThis.APP_CONFIG?.currencySymbol || "₵";
 const currency = (amount) => `${currencySymbol}${Number(amount || 0).toFixed(2)}`;
 // The print popup opens on about:blank, so relative asset paths must be resolved
@@ -58,6 +60,14 @@ function invoiceRow(invoice) {
   view.textContent = "View";
   view.addEventListener("click", () => showInvoice(invoice.id));
   actions.append(view);
+  const edit = document.createElement("button");
+  edit.className = "btn btn-sm btn-outline-light";
+  edit.type = "button";
+  edit.textContent = "Edit";
+  edit.disabled = invoice.status !== "unpaid";
+  edit.title = edit.disabled ? "Invoices with recorded payments cannot be edited." : "Edit invoice";
+  edit.addEventListener("click", () => startInvoiceEdit(invoice.id));
+  actions.append(edit);
   const remove = document.createElement("button");
   remove.className = "btn btn-sm btn-outline-danger";
   remove.type = "button";
@@ -65,7 +75,8 @@ function invoiceRow(invoice) {
   remove.disabled = invoice.status !== "unpaid";
   remove.title = remove.disabled ? "Invoices with recorded payments cannot be deleted." : "Delete invoice";
   remove.addEventListener("click", async () => {
-    if (invoice.status !== "unpaid" || !window.confirm("Delete this invoice? This cannot be undone.")) return;
+    const clientName = invoice.clients?.full_name || "this client";
+    if (invoice.status !== "unpaid" || !window.confirm(`Delete invoice ${invoice.invoice_number} for ${clientName}? This cannot be undone.`)) return;
     remove.disabled = true;
     try {
       await deleteInvoice(invoice.id);
@@ -80,6 +91,34 @@ function invoiceRow(invoice) {
   actions.append(remove);
   row.append(actions);
   return row;
+}
+
+async function startInvoiceEdit(id) {
+  try {
+    const invoice = await getInvoiceDetails(id);
+    if (invoice.status !== "unpaid") throw new Error("Invoices with recorded payments cannot be edited.");
+    editingInvoiceId = invoice.id;
+    const form = document.getElementById("invoiceForm");
+    form.classList.remove("d-none");
+    document.getElementById("toggleInvoiceForm").textContent = `Editing ${invoice.invoice_number}`;
+    const saveButton = document.getElementById("saveInvoiceSubmit");
+    saveButton.textContent = "Save changes";
+    saveButton.dataset.idleLabel = "Save changes";
+    document.getElementById("cancelInvoiceEdit").classList.remove("d-none");
+    document.getElementById("invoiceNewClientWrap").classList.add("d-none");
+    document.getElementById("invoiceNewClient").required = false;
+    document.getElementById("invoiceClient").value = String(invoice.client_id || "");
+    document.getElementById("invoiceDate").value = invoice.invoice_date;
+    document.getElementById("invoiceDueDate").value = invoice.due_date || "";
+    document.getElementById("invoiceTax").value = Number(invoice.tax || 0).toFixed(2);
+    document.getElementById("invoiceNotes").value = invoice.notes || "";
+    const rows = document.getElementById("invoiceItemRows");
+    rows.replaceChildren();
+    invoice.invoice_items.forEach((item) => addInvoiceItem({ name: item.item_name, qty: item.quantity, price: item.price }));
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    showNotice(error.message || "Unable to load invoice for editing.", "danger");
+  }
 }
 
 async function loadInvoices() {
@@ -391,6 +430,10 @@ export async function initInvoices() {
   });
 
   document.getElementById("toggleInvoiceForm").addEventListener("click", () => {
+    if (editingInvoiceId !== null) {
+      resetInvoiceEditor();
+      return;
+    }
     const form = document.getElementById("invoiceForm");
     form.classList.toggle("d-none");
     if (!form.classList.contains("d-none") && !document.getElementById("invoiceItemRows").children.length) addInvoiceItem();
@@ -400,6 +443,21 @@ export async function initInvoices() {
   document.getElementById("invoiceDate").value = new Date().toISOString().slice(0, 10);
 
   const form = document.getElementById("invoiceForm");
+  const cancelEdit = document.getElementById("cancelInvoiceEdit");
+  function resetInvoiceEditor() {
+    editingInvoiceId = null;
+    form.reset();
+    form.classList.add("d-none");
+    document.getElementById("invoiceItemRows").replaceChildren();
+    document.getElementById("invoiceDate").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("invoiceTotal").value = "";
+    document.getElementById("toggleInvoiceForm").innerHTML = '<i class="bi bi-plus-lg"></i> New Invoice';
+    const saveButton = document.getElementById("saveInvoiceSubmit");
+    saveButton.textContent = "Create Invoice";
+    saveButton.dataset.idleLabel = "Create Invoice";
+    cancelEdit.classList.add("d-none");
+  }
+  cancelEdit.addEventListener("click", resetInvoiceEditor);
   let invoiceRequestKey = makeRequestKey();
   form.addEventListener("reset", () => {
     newClientWrap.classList.add("d-none");
@@ -407,7 +465,8 @@ export async function initInvoices() {
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    setFormBusy(form, true, "Creating...");
+    const isEditing = editingInvoiceId !== null;
+    setFormBusy(form, true, isEditing ? "Saving..." : "Creating...");
     try {
       const values = Object.fromEntries(new FormData(form));
       const items = [...document.querySelectorAll("#invoiceItemRows tr")].map((row) => ({
@@ -415,25 +474,33 @@ export async function initInvoices() {
         qty: Number(row.querySelector("[name='quantity']").value),
         price: Number(row.querySelector("[name='price']").value),
       }));
-      await createInvoice({
-        requestKey: invoiceRequestKey,
-        clientId: values.client_id === "__new__" ? null : Number(values.client_id),
-        clientName: values.client_id === "__new__" ? values.client_name.trim() : null,
-        invoiceDate: values.invoice_date,
-        dueDate: values.due_date,
-        tax: Number(values.tax),
-        notes: values.notes,
-        items,
-      });
-      invoiceRequestKey = makeRequestKey();
-      if (values.client_id === "__new__") window.dispatchEvent(new Event("lmg:clients-changed"));
+      if (isEditing) {
+        await updateInvoice({
+          id: editingInvoiceId,
+          clientId: Number(values.client_id),
+          invoiceDate: values.invoice_date,
+          dueDate: values.due_date,
+          tax: Number(values.tax),
+          notes: values.notes,
+          items,
+        });
+      } else {
+        await createInvoice({
+          requestKey: invoiceRequestKey,
+          clientId: values.client_id === "__new__" ? null : Number(values.client_id),
+          clientName: values.client_id === "__new__" ? values.client_name.trim() : null,
+          invoiceDate: values.invoice_date,
+          dueDate: values.due_date,
+          tax: Number(values.tax),
+          notes: values.notes,
+          items,
+        });
+        invoiceRequestKey = makeRequestKey();
+        if (values.client_id === "__new__") window.dispatchEvent(new Event("lmg:clients-changed"));
+      }
       window.dispatchEvent(new Event("lmg:invoices-changed"));
-      form.reset();
-      document.getElementById("invoiceItemRows").replaceChildren();
-      document.getElementById("invoiceDate").value = new Date().toISOString().slice(0, 10);
-      document.getElementById("invoiceTotal").value = "";
-      form.classList.add("d-none");
-      showNotice("Invoice created and inventory updated.");
+      resetInvoiceEditor();
+      showNotice(isEditing ? "Invoice updated." : "Invoice created and inventory updated.");
       await loadInvoices();
     } catch (error) {
       showNotice(error.message || "Unable to create invoice.", "danger");

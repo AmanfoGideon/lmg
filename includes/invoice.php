@@ -121,6 +121,99 @@ function invoice_insert(mysqli $conn, array $invoice, array $calculation): int {
   return $id;
 }
 
+/** Update an unpaid invoice and its items atomically, preserving its public invoice number. */
+function invoice_update_unpaid(mysqli $conn, int $invoiceId, array $invoice, array $calculation): void {
+  $conn->query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+  $conn->begin_transaction();
+  try {
+    $find = $conn->prepare('SELECT invoice_number, client_id, invoice_date, due_date, subtotal, tax, total, notes FROM invoices WHERE id=? FOR UPDATE');
+    $find->bind_param('i', $invoiceId);
+    $find->execute();
+    $existing = $find->get_result()->fetch_assoc();
+    $find->close();
+    if (!$existing) throw new InvalidArgumentException('Invoice not found.');
+
+    $payment = $conn->prepare("SELECT id FROM transactions WHERE invoice_id=? AND type='payment' LIMIT 1");
+    $payment->bind_param('i', $invoiceId);
+    $payment->execute();
+    $hasPayment = (bool)$payment->get_result()->fetch_row();
+    $payment->close();
+    if ($hasPayment) throw new InvalidArgumentException('Invoices with recorded payments cannot be edited.');
+
+    $oldItemsStmt = $conn->prepare('SELECT item_name, quantity FROM invoice_items WHERE invoice_id=? ORDER BY id');
+    $oldItemsStmt->bind_param('i', $invoiceId);
+    $oldItemsStmt->execute();
+    $oldItems = $oldItemsStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $oldItemsStmt->close();
+    $oldStockQuantities = [];
+    $newStockQuantities = [];
+    foreach ($oldItems as $item) {
+      $key = strtolower(trim((string)$item['item_name']));
+      $oldStockQuantities[$key] = ($oldStockQuantities[$key] ?? 0) + (int)$item['quantity'];
+    }
+    foreach ($calculation['items'] as $item) {
+      $key = strtolower(trim((string)$item['name']));
+      $newStockQuantities[$key] = ($newStockQuantities[$key] ?? 0) + (int)$item['qty'];
+    }
+    ksort($oldStockQuantities);
+    ksort($newStockQuantities);
+    if ($oldStockQuantities !== $newStockQuantities && $conn->query("SHOW TABLES LIKE 'products'")->num_rows > 0) {
+      $stockNames = array_unique(array_merge(array_keys($oldStockQuantities), array_keys($newStockQuantities)));
+      $productCheck = $conn->prepare('SELECT id FROM products WHERE LOWER(name)=? LIMIT 1');
+      foreach ($stockNames as $name) {
+        $productCheck->bind_param('s', $name);
+        $productCheck->execute();
+        if ($productCheck->get_result()->fetch_row()) {
+          $productCheck->close();
+          throw new InvalidArgumentException('Line items linked to inventory cannot be changed because their original stock movement is not recorded. Other invoice details can still be edited.');
+        }
+      }
+      $productCheck->close();
+    }
+
+    $clientId = (int)$invoice['client_id'];
+    $client = $conn->prepare('SELECT id FROM clients WHERE id=? LIMIT 1');
+    $client->bind_param('i', $clientId);
+    $client->execute();
+    $clientExists = (bool)$client->get_result()->fetch_row();
+    $client->close();
+    if (!$clientExists) throw new InvalidArgumentException('Select a valid client.');
+
+    $update = $conn->prepare('UPDATE invoices SET client_id=?, invoice_date=?, due_date=?, subtotal=?, tax=?, total=?, notes=? WHERE id=?');
+    $invoiceDate = (string)$invoice['invoice_date'];
+    $dueDate = $invoice['due_date'] ?: null;
+    $notes = (string)($invoice['notes'] ?? '');
+    $update->bind_param('issssssi', $clientId, $invoiceDate, $dueDate, $calculation['subtotal'], $calculation['tax'], $calculation['total'], $notes, $invoiceId);
+    $update->execute();
+    $update->close();
+
+    $removeItems = $conn->prepare('DELETE FROM invoice_items WHERE invoice_id=?');
+    $removeItems->bind_param('i', $invoiceId);
+    $removeItems->execute();
+    $removeItems->close();
+    $insertItem = $conn->prepare('INSERT INTO invoice_items (invoice_id, item_name, quantity, price, total) VALUES (?,?,?,?,?)');
+    foreach ($calculation['items'] as $item) {
+      $name = $item['name'];
+      $quantity = $item['qty'];
+      $price = $item['price'];
+      $total = $item['total'];
+      $insertItem->bind_param('isiss', $invoiceId, $name, $quantity, $price, $total);
+      $insertItem->execute();
+    }
+    $insertItem->close();
+
+    log_action($conn, 'invoice_update', (string)$existing['invoice_number'], [
+      'entity_id'=>(string)$invoiceId,
+      'old_values'=>['client_id'=>(int)$existing['client_id'],'invoice_date'=>$existing['invoice_date'],'due_date'=>$existing['due_date'],'subtotal'=>(string)$existing['subtotal'],'tax'=>(string)$existing['tax'],'total'=>(string)$existing['total'],'notes'=>$existing['notes']],
+      'new_values'=>['client_id'=>$clientId,'invoice_date'=>$invoiceDate,'due_date'=>$dueDate,'subtotal'=>$calculation['subtotal'],'tax'=>$calculation['tax'],'total'=>$calculation['total'],'item_count'=>count($calculation['items'])]
+    ]);
+    $conn->commit();
+  } catch (Throwable $e) {
+    try { $conn->rollback(); } catch (Throwable $ignored) {}
+    throw $e;
+  }
+}
+
 /** Recompute the existing unpaid/partial/paid status from exact DECIMAL payment sums. */
 function invoice_recalculate_status(mysqli $conn, int $invoiceId): array {
   $stmt = $conn->prepare("SELECT i.total, i.status, COALESCE(SUM(t.amount),0) AS paid FROM invoices i LEFT JOIN transactions t ON t.invoice_id=i.id AND t.type='payment' WHERE i.id=? GROUP BY i.id, i.total, i.status");

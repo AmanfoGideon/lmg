@@ -6,7 +6,7 @@ require_once "../includes/sms.php";
 require_once "../includes/invoice.php";
 
 $id = (int)($_GET['id'] ?? 0);
-$message = '';
+$message = isset($_GET['updated']) ? 'Invoice updated.' : '';
 $requestKey = bin2hex(random_bytes(16));
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   $action = $_POST['action'] ?? '';

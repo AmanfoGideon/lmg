@@ -297,7 +297,7 @@
             <div class="col-md-4"><label class="form-label" for="invoiceTax">Tax</label><input class="form-control" id="invoiceTax" name="tax" type="number" min="0" step="0.01" value="0"></div>
             <div class="col-md-4"><label class="form-label" for="invoiceTotal">Subtotal + tax</label><input class="form-control" id="invoiceTotal" readonly></div>
             <div class="col-md-4"><label class="form-label" for="invoiceNotes">Notes</label><input class="form-control" id="invoiceNotes" name="notes"></div>
-            <div class="col-12"><button class="btn btn-primary" type="submit">Create Invoice</button></div>
+            <div class="col-12"><button class="btn btn-primary" id="saveInvoiceSubmit" type="submit">Create Invoice</button><button class="btn btn-outline-light ms-2 d-none" id="cancelInvoiceEdit" type="button">Cancel edit</button></div>
           </form>
           <div class="table-responsive"><table class="table table-sm table-brand align-middle"><thead><tr><th>Number</th><th>Client</th><th>Date</th><th>Due</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody id="invoiceRows"></tbody></table></div>
         </div>

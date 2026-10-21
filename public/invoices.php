@@ -68,6 +68,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $payment->close();
         if ($hasPayments) throw new InvalidArgumentException('Invoices with recorded payments cannot be deleted.');
 
+        if ($conn->query("SHOW TABLES LIKE 'products'")->num_rows > 0) {
+          $inventory = $conn->prepare('SELECT ii.id FROM invoice_items ii JOIN products p ON LOWER(p.name)=LOWER(ii.item_name) WHERE ii.invoice_id=? LIMIT 1');
+          $inventory->bind_param('i', $invoiceId);
+          $inventory->execute();
+          $hasInventoryLink = (bool)$inventory->get_result()->fetch_row();
+          $inventory->close();
+          if ($hasInventoryLink) throw new InvalidArgumentException('Invoices with inventory-linked items cannot be deleted until stock is reconciled.');
+        }
+
         $delete = $conn->prepare('DELETE FROM invoices WHERE id=?');
         $delete->bind_param('i', $invoiceId);
         $delete->execute();
@@ -183,6 +192,11 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                   </td>
                   <td class="d-flex gap-2 align-items-center">
                     <a class="btn btn-sm btn-outline-light" href="invoice_view.php?id=<?= (int)$i['id'] ?>">View</a>
+                    <?php if ($i['status'] === 'unpaid'): ?>
+                      <a class="btn btn-sm btn-outline-light" href="invoice_edit.php?id=<?= (int)$i['id'] ?>">Edit</a>
+                    <?php else: ?>
+                      <button type="button" class="btn btn-sm btn-outline-light" disabled title="Invoices with recorded payments cannot be edited.">Edit</button>
+                    <?php endif; ?>
                     <form method="POST" class="d-inline-block" onsubmit="return confirm('Delete this invoice? This cannot be undone.');">
                       <?= csrf_input() ?>
                       <input type="hidden" name="action" value="delete">

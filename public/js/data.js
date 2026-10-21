@@ -174,6 +174,21 @@ export async function deleteInvoice(invoiceId) {
   return unwrap(await getSupabase().rpc("delete_invoice", { p_invoice_id: invoiceId }));
 }
 
+export async function updateInvoice(invoice) {
+  if (!isOnline()) {
+    throw new Error("Invoice editing requires an internet connection.");
+  }
+  return unwrap(await getSupabase().rpc("update_unpaid_invoice", {
+    p_invoice_id: invoice.id,
+    p_client_id: invoice.clientId,
+    p_invoice_date: invoice.invoiceDate,
+    p_due_date: invoice.dueDate || null,
+    p_tax: invoice.tax,
+    p_notes: invoice.notes || null,
+    p_items: invoice.items,
+  }));
+}
+
 export async function importClients(rows) {
   return unwrap(await getSupabase().rpc("import_clients", { p_rows: rows }));
 }
