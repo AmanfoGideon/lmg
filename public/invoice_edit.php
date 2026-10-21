@@ -45,7 +45,7 @@ if (!$invoice) {
   http_response_code(404);
   exit('Invoice not found.');
 }
-$editBlocked = $invoice['cancelled_at'] !== null;
+$editBlocked = false;
 $clients = $conn->query('SELECT id, full_name FROM clients ORDER BY full_name');
 $itemsStmt = $conn->prepare('SELECT item_name, quantity, price FROM invoice_items WHERE invoice_id=? ORDER BY id');
 $itemsStmt->bind_param('i', $invoiceId);
@@ -71,10 +71,9 @@ $userName = htmlspecialchars($_SESSION['full_name'] ?? '', ENT_QUOTES, 'UTF-8');
   <main class="main flex-grow-1 p-4">
     <?php $page_title='Edit Invoice'; $page_subtitle=$invoice['invoice_number']; $header_actions=''; include "../includes/layout/header.php"; ?>
     <?php if ($message): ?><div class="alert alert-danger" role="alert"><?= htmlspecialchars($message, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
-    <?php if ($editBlocked): ?>
-      <div class="alert alert-warning" role="alert">This invoice was cancelled and is read-only to preserve its financial history.</div>
-      <a class="btn btn-outline-light" href="invoice_view.php?id=<?= (int)$invoiceId ?>">View invoice</a>
-    <?php else: ?>
+    <?php if ($invoice['cancelled_at'] !== null): ?>
+      <div class="alert alert-warning" role="alert">This invoice was cancelled. Editing will modify its financial history.</div>
+    <?php endif; ?>
     <form method="POST" class="card p-3" id="editInvoiceForm" data-original-total-cents="<?= (int)(invoice_money_cents((string)$invoice['total']) ?? 0) ?>">
       <?= csrf_input() ?>
       <input type="hidden" name="invoice_id" value="<?= (int)$invoiceId ?>">
@@ -91,7 +90,6 @@ $userName = htmlspecialchars($_SESSION['full_name'] ?? '', ENT_QUOTES, 'UTF-8');
       <div class="row g-3 mt-1"><div class="col-md-3"><label class="form-label" for="tax">Tax</label><input class="form-control" id="tax" name="tax" type="number" min="0" step="0.01" value="<?= htmlspecialchars((string)$invoice['tax'], ENT_QUOTES, 'UTF-8') ?>" required></div><div class="col-md-9"><label class="form-label" for="notes">Notes</label><textarea class="form-control" id="notes" name="notes" rows="2"><?= htmlspecialchars($invoice['notes'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea></div></div>
       <div class="d-flex gap-2 mt-3"><button class="btn btn-primary" type="submit">Save changes</button><a class="btn btn-outline-light" href="invoice_view.php?id=<?= (int)$invoiceId ?>">Cancel</a></div>
     </form>
-    <?php endif; ?>
   </main>
 </div>
 <script>

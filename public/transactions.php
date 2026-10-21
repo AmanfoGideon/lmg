@@ -86,7 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($q->fetch()) {
           $q->close();
           $conn->begin_transaction();
-          $del = $conn->prepare("DELETE FROM transactions WHERE id=? AND NOT (type='payment' AND invoice_id IS NOT NULL)");
+          $del = $conn->prepare("DELETE FROM transactions WHERE id=?");
           $del->bind_param('i', $txId);
           if ($del->execute() && $del->affected_rows > 0) {
             $message = 'Transaction deleted';
@@ -94,12 +94,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               'entity_id' => (string)$txId,
               'old_values' => ['client_id'=>$foundClientId,'amount'=>$foundAmount,'type'=>$foundType,'date'=>$foundDate,'payment_method'=>$foundMethod,'description'=>$foundDescription,'invoice_id'=>$foundInv]
             ]);
+            // Recalculate invoice status if this was an invoice payment
+            if ($foundType === 'payment' && $foundInv !== null) {
+              $invoiceStatus = invoice_recalculate_status($conn, (int)$foundInv);
+              if ($invoiceStatus['status'] !== $invoiceStatus['old_status']) {
+                audit_event($conn, [
+                  'action'=>'invoice.status.updated','module'=>'invoices','entity_type'=>'invoice','entity_id'=>(string)$foundInv,
+                  'description'=>'Invoice payment status recalculated after payment deletion.',
+                  'old_values'=>['status'=>$invoiceStatus['old_status']],
+                  'new_values'=>['status'=>$invoiceStatus['status'],'paid_total'=>invoice_cents_decimal($invoiceStatus['paid_cents']),'balance'=>invoice_cents_decimal($invoiceStatus['balance_cents'])]
+                ]);
+              }
+            }
             $conn->commit();
           } else {
             $conn->rollback();
-            $message = ($foundType === 'payment' && $foundInv !== null)
-              ? 'Invoice payments are preserved in the financial history; record a reversal instead.'
-              : 'Error deleting transaction';
+            $message = 'Error deleting transaction';
           }
           $del->close();
         } else {
@@ -116,57 +126,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $oldResult = $oldStmt->get_result();
         $oldTx = $oldResult->fetch_assoc() ?: null;
         $oldStmt->close();
-        if ($oldTx && $oldTx['type'] === 'payment' && $oldTx['invoice_id'] !== null) {
-          try {
-            $method = trim((string)($_POST['payment_method'] ?? ''));
-            invoice_update_payment($conn, $txId, (string)($_POST['amount'] ?? ''), $method === '' ? null : $method, trim((string)($_POST['description'] ?? '')), (string)($_POST['date'] ?? ''));
-            $message = 'Invoice payment corrected. The existing receipt and payment record were updated.';
-          } catch (InvalidArgumentException $e) {
-            $message = $e->getMessage();
-          } catch (Throwable $e) {
-            error_log('Invoice payment correction failed: '.$e->getMessage());
-            $message = 'Invoice payment could not be corrected. Please try again.';
+        $conn->begin_transaction();
+        $amount = (float)($_POST['amount'] ?? 0);
+        $type = $_POST['type'] ?? 'income';
+        $payment_method = $_POST['payment_method'] ?? null;
+        $description = trim($_POST['description'] ?? '');
+        $date = $_POST['date'] ?: date('Y-m-d');
+        $invoice_id = (int)($_POST['invoice_id'] ?? 0);
+        if (!in_array($type, ['income','expense','invoice','payment'])) { $type = 'income'; }
+        $upd = $conn->prepare("UPDATE transactions SET amount=?, type=?, payment_method=?, description=?, date=?, invoice_id=? WHERE id=?");
+        $upd->bind_param('dssssii', $amount, $type, $payment_method, $description, $date, $invoice_id, $txId);
+        if ($upd->execute() && $upd->affected_rows > 0) {
+          $message = 'Transaction updated';
+          if ($oldTx) {
+            log_action($conn, 'transaction_update', (string)$txId.'|'.$type.'|'.$amount, [
+              'entity_id' => (string)$txId,
+              'old_values' => $oldTx,
+              'new_values' => ['client_id'=>(int)$oldTx['client_id'],'amount'=>$amount,'type'=>$type,'date'=>$date,'payment_method'=>$payment_method,'description'=>$description,'invoice_id'=>$invoice_id ?: null]
+            ]);
           }
-        } else {
-          $conn->begin_transaction();
-          $amount = (float)($_POST['amount'] ?? 0);
-          $type = $_POST['type'] ?? 'income';
-          $payment_method = $_POST['payment_method'] ?? null;
-          $description = trim($_POST['description'] ?? '');
-          $date = $_POST['date'] ?: date('Y-m-d');
-          $invoice_id = (int)($_POST['invoice_id'] ?? 0);
-          if (!in_array($type, ['income','expense','invoice','payment'])) { $type = 'income'; }
-          $upd = $conn->prepare("UPDATE transactions SET amount=?, type=?, payment_method=?, description=?, date=?, invoice_id=? WHERE id=? AND NOT (type='payment' AND invoice_id IS NOT NULL) AND NOT (?='payment' AND ?>0)");
-          $upd->bind_param('dssssiisi', $amount, $type, $payment_method, $description, $date, $invoice_id, $txId, $type, $invoice_id);
-          if ($upd->execute() && $upd->affected_rows > 0) {
-            $message = 'Transaction updated';
-            if ($oldTx) {
-              log_action($conn, 'transaction_update', (string)$txId.'|'.$type.'|'.$amount, [
-                'entity_id' => (string)$txId,
-                'old_values' => $oldTx,
-                'new_values' => ['client_id'=>(int)$oldTx['client_id'],'amount'=>$amount,'type'=>$type,'date'=>$date,'payment_method'=>$payment_method,'description'=>$description,'invoice_id'=>$invoice_id ?: null]
+          // Recalculate invoice status if this was or is an invoice payment
+          $oldInvoiceId = $oldTx ? (int)($oldTx['invoice_id'] ?? 0) : 0;
+          if ($oldInvoiceId > 0 && $oldTx['type'] === 'payment') {
+            $oldInvoiceStatus = invoice_recalculate_status($conn, $oldInvoiceId);
+            if ($oldInvoiceStatus['status'] !== $oldInvoiceStatus['old_status']) {
+              audit_event($conn, [
+                'action'=>'invoice.status.updated','module'=>'invoices','entity_type'=>'invoice','entity_id'=>(string)$oldInvoiceId,
+                'description'=>'Invoice payment status recalculated after transaction update.',
+                'old_values'=>['status'=>$oldInvoiceStatus['old_status']],
+                'new_values'=>['status'=>$oldInvoiceStatus['status'],'paid_total'=>invoice_cents_decimal($oldInvoiceStatus['paid_cents']),'balance'=>invoice_cents_decimal($oldInvoiceStatus['balance_cents'])]
               ]);
             }
-            if ($invoice_id > 0 && $type !== 'payment') {
-              $invoiceStatus = invoice_recalculate_status($conn, $invoice_id);
-              if ($invoiceStatus['status'] !== $invoiceStatus['old_status']) {
-                audit_event($conn, [
-                  'action'=>'invoice.status.updated','module'=>'invoices','entity_type'=>'invoice','entity_id'=>(string)$invoice_id,
-                  'description'=>'Invoice payment status recalculated after a transaction update.',
-                  'old_values'=>['status'=>$invoiceStatus['old_status']],
-                  'new_values'=>['status'=>$invoiceStatus['status'],'paid_total'=>invoice_cents_decimal($invoiceStatus['paid_cents'])]
-                ]);
-              }
-            }
-            $conn->commit();
-          } else {
-            $conn->rollback();
-            $message = ($type === 'payment' && $invoice_id > 0)
-              ? 'Invoice payments must be edited from their existing payment record.'
-              : 'Error updating transaction';
           }
-          $upd->close();
+          if ($invoice_id > 0 && $type === 'payment' && $invoice_id !== $oldInvoiceId) {
+            $newInvoiceStatus = invoice_recalculate_status($conn, $invoice_id);
+            if ($newInvoiceStatus['status'] !== $newInvoiceStatus['old_status']) {
+              audit_event($conn, [
+                'action'=>'invoice.status.updated','module'=>'invoices','entity_type'=>'invoice','entity_id'=>(string)$invoice_id,
+                'description'=>'Invoice payment status recalculated after transaction update.',
+                'old_values'=>['status'=>$newInvoiceStatus['old_status']],
+                'new_values'=>['status'=>$newInvoiceStatus['status'],'paid_total'=>invoice_cents_decimal($newInvoiceStatus['paid_cents']),'balance'=>invoice_cents_decimal($newInvoiceStatus['balance_cents'])]
+              ]);
+            }
+          }
+          $conn->commit();
+        } else {
+          $conn->rollback();
+          $message = 'Error updating transaction';
         }
+        $upd->close();
       }
   }
   }
@@ -343,7 +351,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                       data-method="<?= htmlspecialchars($t['payment_method'] ?? '', ENT_QUOTES) ?>"
                       data-desc="<?= htmlspecialchars($t['description'] ?? '', ENT_QUOTES) ?>"
                       aria-label="Edit transaction"><i class="bi bi-pencil-square"></i></button>
-                    <form method="POST" class="d-inline-block ms-1" onsubmit="return confirm('Delete this transaction?');">
+                    <form method="POST" class="d-inline-block ms-1 tx-delete-form" data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES) ?>" data-invoice-id="<?= (int)($t['invoice_id'] ?? 0) ?>" data-invoice-number="<?= htmlspecialchars($t['invoice_number'] ?? '', ENT_QUOTES) ?>">
                       <?= csrf_input() ?>
                       <input type="hidden" name="action" value="delete">
                       <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
@@ -541,11 +549,8 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       fClient.value = dataset.client || '';
       fAmount.value = dataset.amount || '';
       fType.value = dataset.type || 'income';
-      const linkedInvoicePayment = fType.value === 'payment' && Boolean(dataset.invoiceId && dataset.invoiceId !== '0');
-      fType.disabled = linkedInvoicePayment;
       fInvoiceNumber.value = dataset.invoiceNumber || '';
       fInvoiceId.value = dataset.invoiceId || '';
-      fInvoiceNumber.disabled = linkedInvoicePayment;
       fMethod.value = dataset.method || '';
       fDate.value = dataset.date || '';
       fDesc.value = dataset.desc || '';
@@ -555,11 +560,25 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
 
     // toggle invoice row when type changes inside modal
     fType.addEventListener('change', function(){
-      fType.disabled = false;
-      fInvoiceNumber.disabled = false;
       invoiceRow.style.display = (this.value === 'payment') ? '' : 'none';
     });
   })();
+
+  // Handle transaction delete confirmations with appropriate warnings
+  document.querySelectorAll('.tx-delete-form').forEach(function(form) {
+    form.addEventListener('submit', function(event) {
+      const type = form.dataset.type;
+      const invoiceId = form.dataset.invoiceId;
+      const invoiceNumber = form.dataset.invoiceNumber;
+      let message = 'Delete this transaction? This cannot be undone.';
+      if (type === 'payment' && invoiceId && invoiceId !== '0') {
+        message = `Delete payment for invoice ${invoiceNumber}? This will affect the invoice balance and payment status. This cannot be undone.`;
+      }
+      if (!window.confirm(message)) {
+        event.preventDefault();
+      }
+    });
+  });
 </script>
 <?php if (isset($_GET['edit_transaction']) && filter_var($_GET['edit_transaction'], FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]])): ?>
 <script>

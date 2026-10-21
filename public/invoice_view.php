@@ -294,7 +294,15 @@ $role = $_SESSION['role'] ?? 'staff';
                   <td><?= htmlspecialchars($paymentRow['payment_method'] ?: '—') ?></td>
                   <td><?= htmlspecialchars($paymentRow['description'] ?: '—') ?></td>
                   <td class="text-end"><?= fmtCurrency((float)$paymentRow['amount']) ?></td>
-                  <td><a class="btn btn-sm btn-outline-light" href="transactions.php?edit_transaction=<?= (int)$paymentRow['id'] ?>">Edit payment</a></td>
+                  <td>
+                    <a class="btn btn-sm btn-outline-light" href="transactions.php?edit_transaction=<?= (int)$paymentRow['id'] ?>">Edit</a>
+                    <form method="POST" action="transactions.php" class="d-inline-block ms-1 payment-delete-form" data-payment-id="<?= (int)$paymentRow['id'] ?>" data-amount="<?= fmtCurrency((float)$paymentRow['amount']) ?>">
+                      <?= csrf_input() ?>
+                      <input type="hidden" name="action" value="delete">
+                      <input type="hidden" name="id" value="<?= (int)$paymentRow['id'] ?>">
+                      <button class="btn btn-sm btn-danger" aria-label="Delete payment"><i class="bi bi-trash"></i></button>
+                    </form>
+                  </td>
                 </tr>
               <?php endforeach; ?>
             </tbody>
@@ -309,5 +317,17 @@ $role = $_SESSION['role'] ?? 'staff';
 </div>
 
 <script src="js/ui.js"></script>
+<script>
+  document.querySelectorAll('.payment-delete-form').forEach(function(form) {
+    form.addEventListener('submit', function(event) {
+      const paymentId = form.dataset.paymentId;
+      const amount = form.dataset.amount;
+      const message = `Delete payment TXN-${paymentId} of ${amount}? This will affect the invoice balance and payment status. This cannot be undone.`;
+      if (!window.confirm(message)) {
+        event.preventDefault();
+      }
+    });
+  });
+</script>
 </body>
 </html>

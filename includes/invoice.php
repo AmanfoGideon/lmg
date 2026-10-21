@@ -132,7 +132,6 @@ function invoice_update(mysqli $conn, int $invoiceId, array $invoice, array $cal
     $existing = $find->get_result()->fetch_assoc();
     $find->close();
     if (!$existing) throw new InvalidArgumentException('Invoice not found.');
-    if ($existing['cancelled_at'] !== null) throw new InvalidArgumentException('Cancelled invoices are read-only.');
 
     $payment = $conn->prepare("SELECT COALESCE(SUM(amount),0) AS paid FROM transactions WHERE invoice_id=? AND type='payment'");
     $payment->bind_param('i', $invoiceId);
