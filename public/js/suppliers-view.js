@@ -1,8 +1,10 @@
 import { getSupabase } from "./supabase.js";
+import { createSupplierRecord } from "./data.js";
 import { setEmptyRow, setFormBusy, showNotice } from "./feedback.js";
 
 let suppliers = [];
 let supplierBalances = new Map();
+let supplierBalancesAvailable = true;
 let activeUserId = null;
 
 const money = (amount) => `${globalThis.APP_CONFIG?.currencySymbol || "GH₵"}${Number(amount || 0).toFixed(2)}`;
@@ -53,8 +55,8 @@ function renderSuppliers(query = "") {
       supplier.business_name,
       [supplier.contact_person, supplier.phone].filter(Boolean).join(" · "),
       supplier.category || "—",
-      money(balance.outstanding),
-      money(balance.overdue),
+      supplierBalancesAvailable ? money(balance.outstanding) : "—",
+      supplierBalancesAvailable ? money(balance.overdue) : "—",
       supplier.status === "active" ? "Active" : "Inactive",
     ];
     values.forEach((value, index) => {
@@ -102,12 +104,14 @@ async function loadSuppliers() {
     const { data: bills, error: billError } = await client.from("supplier_bills")
       .select("supplier_id, total, status, due_date, supplier_payment_allocations(amount, reversed_at)");
     if (billError) {
+      supplierBalancesAvailable = false;
       console.error("Supplier records loaded, but payable balances could not be loaded:", billError);
       renderSuppliers(document.getElementById("supplierSearch").value);
       showNotice("Supplier records loaded, but payable balances are unavailable. Apply the latest supplier migrations and access grants.", "warning");
       return;
     }
 
+    supplierBalancesAvailable = true;
     const today = new Date().toISOString().slice(0, 10);
     (bills || []).forEach((bill) => {
       if (bill.status === "cancelled") return;
@@ -122,6 +126,7 @@ async function loadSuppliers() {
     });
     renderSuppliers(document.getElementById("supplierSearch").value);
   } catch (error) {
+    supplierBalancesAvailable = false;
     console.error("Supplier records could not be loaded:", error);
     setEmptyRow(body, 7, `Unable to load suppliers: ${error.message || "Check Supabase table permissions and migrations."}`);
     document.getElementById("supplierCount").textContent = "Supplier data unavailable";
@@ -168,14 +173,24 @@ export async function initSuppliers() {
     };
     setFormBusy(form, true, "Saving...");
     try {
-      const request = id
-        ? client.from("suppliers").update(values).eq("id", id)
-        : client.from("suppliers").insert({ ...values, status: "active", created_by: activeUserId });
-      const { error: saveError } = await request;
-      if (saveError) throw saveError;
+      if (id) {
+        const { error: saveError } = await client.from("suppliers").update(values).eq("id", id);
+        if (saveError) throw saveError;
+      } else {
+        await createSupplierRecord({
+          businessName: values.business_name,
+          contactPerson: values.contact_person,
+          phone: values.phone,
+          email: values.email,
+          category: values.category,
+          address: values.address,
+          notes: values.notes,
+        });
+      }
       resetSupplierForm();
       showNotice(id ? "Supplier updated." : "Supplier added.");
       await loadSuppliers();
+      if (!id) window.dispatchEvent(new Event("lmg:suppliers-changed"));
     } catch (saveError) {
       showNotice(saveError.message || "Unable to save supplier.", "danger");
     } finally {
@@ -185,5 +200,6 @@ export async function initSuppliers() {
 
   document.getElementById("cancelSupplierEdit").addEventListener("click", resetSupplierForm);
   document.getElementById("supplierSearch").addEventListener("input", (event) => renderSuppliers(event.currentTarget.value));
+  window.addEventListener("lmg:suppliers-changed", loadSuppliers);
   await loadSuppliers();
 }

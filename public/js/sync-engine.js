@@ -381,16 +381,17 @@ async function syncTransaction(supabase, item) {
       throw error;
     }
     // Use RPC function with idempotency key
-    const { data: result, error } = await supabase.rpc("create_transaction_offline", {
+    const { data: result, error } = await supabase.rpc("create_transaction_with_supplier_offline", {
       p_idempotency_key: idempotencyKey,
-      p_client_id: data.client_id,
-      p_client_name: data.client_name,
+      p_client_id: data.client_id ?? data.clientId,
+      p_client_name: data.client_name ?? data.clientName,
       p_amount: data.amount,
       p_type: data.type,
-      p_payment_method: data.payment_method,
+      p_payment_method: data.payment_method ?? data.paymentMethod,
       p_description: data.description,
       p_date: data.date,
-      p_invoice_id: data.invoice_id,
+      p_invoice_id: data.invoice_id ?? data.invoiceId,
+      p_supplier_id: data.supplier_id ?? data.supplierId,
     });
 
     if (error) throw error;
@@ -415,12 +416,16 @@ async function syncTransaction(supabase, item) {
       throw new Error("Version conflict - financial record");
     }
 
-    const { data: result, error } = await supabase
-      .from("transactions")
-      .update(data)
-      .eq("id", item.server_id)
-      .select()
-      .single();
+    const { data: result, error } = await supabase.rpc("update_transaction_with_supplier", {
+      p_id: item.server_id,
+      p_amount: data.amount,
+      p_type: data.type,
+      p_payment_method: data.payment_method ?? data.paymentMethod ?? null,
+      p_description: data.description || null,
+      p_date: data.date,
+      p_invoice_id: data.invoice_id ?? data.invoiceId ?? null,
+      p_supplier_id: data.supplier_id ?? data.supplierId ?? null,
+    });
 
     if (error) throw error;
     return result;
@@ -781,7 +786,7 @@ export async function downloadLatestData() {
   // Download transactions (last 100)
   const { data: transactions } = await supabase
     .from("transactions")
-    .select("*")
+    .select("*, suppliers(business_name, status)")
     .order("date", { ascending: false })
     .limit(100);
   if (transactions) {

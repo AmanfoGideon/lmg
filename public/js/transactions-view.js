@@ -1,5 +1,7 @@
 import {
   createTransaction,
+  createSupplierRecord,
+  listActiveSuppliers,
   listClientsForForms,
   listInvoices,
   listTransactions,
@@ -12,8 +14,12 @@ import Modal from "bootstrap/js/dist/modal";
 
 let clients = [];
 let invoices = [];
+let suppliers = [];
 let transactions = [];
 let editModal;
+let createSupplierModal;
+let supplierModalTarget = "create";
+let supplierCreateBusy = false;
 const currencySymbol = globalThis.APP_CONFIG?.currencySymbol || "₵";
 
 function makeRequestKey() {
@@ -32,6 +38,23 @@ function setSelectOptions(select, values, placeholder, selectedValue = "") {
   addOption(select, "", placeholder);
   values.forEach((item) => addOption(select, String(item.id), item.label));
   select.value = selectedValue;
+}
+
+function setSupplierOptions(select, selectedValue = "", currentSupplier = null) {
+  const options = suppliers.map((supplier) => ({ id: supplier.id, label: supplier.business_name }));
+  if (currentSupplier && !options.some((supplier) => String(supplier.id) === String(currentSupplier.id))) {
+    options.push({
+      id: currentSupplier.id,
+      label: `${currentSupplier.business_name || "Supplier"}${currentSupplier.status === "inactive" ? " (inactive)" : ""}`,
+    });
+  }
+  setSelectOptions(select, options, "No supplier", selectedValue);
+}
+
+function syncSupplierFields(type, select, wrapper) {
+  const isExpense = type.value === "expense";
+  wrapper.classList.toggle("d-none", !isExpense);
+  if (!isExpense) select.value = "";
 }
 
 // Receipts open on about:blank, so relative asset paths must be resolved against
@@ -206,16 +229,16 @@ function openReceipt(transaction) {
 function renderTransactions(query = "") {
   const body = document.getElementById("transactionRows");
   const filtered = transactions.filter((transaction) => {
-    const search = `${transaction.clients?.full_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.description || ""}`;
+    const search = `${transaction.clients?.full_name || transaction.client_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.suppliers?.business_name || transaction.supplier_name || ""} ${transaction.description || ""}`;
     return search.toLowerCase().includes(query.toLowerCase());
   });
   if (!filtered.length) {
-    setEmptyRow(body, 8, query ? "No transactions match this search." : "No transactions have been recorded yet.");
+    setEmptyRow(body, 9, query ? "No transactions match this search." : "No transactions have been recorded yet.");
     return;
   }
   body.replaceChildren(...filtered.map((transaction) => {
     const row = document.createElement("tr");
-    const values = [transaction.clients?.full_name, transaction.type, transaction.invoices?.invoice_number, `${currencySymbol}${Number(transaction.amount).toFixed(2)}`, transaction.date, transaction.payment_method, transaction.description];
+    const values = [transaction.clients?.full_name || transaction.client_name, transaction.type, transaction.invoices?.invoice_number, transaction.suppliers?.business_name || transaction.supplier_name, `${currencySymbol}${Number(transaction.amount).toFixed(2)}`, transaction.date, transaction.payment_method, transaction.description];
     values.forEach((value) => {
       const cell = document.createElement("td");
       cell.textContent = value ?? "";
@@ -266,6 +289,14 @@ function openEdit(transaction) {
   document.getElementById("editTransactionClient").value = transaction.clients?.full_name || "";
   document.getElementById("editTransactionAmount").value = transaction.amount;
   document.getElementById("editTransactionType").value = transaction.type;
+  const editSupplier = document.getElementById("editTransactionSupplier");
+  const currentSupplier = transaction.suppliers || (transaction.supplier_id ? {
+    id: transaction.supplier_id,
+    business_name: transaction.supplier_name || "Inactive supplier",
+    status: "unknown",
+  } : null);
+  setSupplierOptions(editSupplier, transaction.supplier_id || "", currentSupplier);
+  syncSupplierFields(document.getElementById("editTransactionType"), editSupplier, document.getElementById("editTransactionSupplierWrap"));
   document.getElementById("editTransactionMethod").value = transaction.payment_method || "";
   document.getElementById("editTransactionDate").value = transaction.date;
   document.getElementById("editTransactionDescription").value = transaction.description || "";
@@ -275,20 +306,37 @@ function openEdit(transaction) {
 
 async function loadTransactions() {
   const body = document.getElementById("transactionRows");
-  setEmptyRow(body, 8, "Loading transactions...");
+  setEmptyRow(body, 9, "Loading transactions...");
   try {
     transactions = await listTransactions();
     renderTransactions(document.getElementById("transactionSearch").value.trim());
   } catch (error) {
-    setEmptyRow(body, 8, "Unable to load transactions.");
+    setEmptyRow(body, 9, "Unable to load transactions.");
     showNotice(error.message || "Unable to load transactions.", "danger");
   }
 }
 
 export async function initTransactions() {
   editModal = new Modal(document.getElementById("editTransactionModal"));
+  const createSupplierModalElement = document.getElementById("createSupplierModal");
+  createSupplierModal = new Modal(createSupplierModalElement);
+  createSupplierModalElement.addEventListener("hide.bs.modal", (event) => {
+    if (supplierCreateBusy) event.preventDefault();
+  });
   clients = await listClientsForForms();
   invoices = await listInvoices();
+  try {
+    suppliers = await listActiveSuppliers();
+    document.getElementById("transactionSupplierHelp").textContent = suppliers.length
+      ? "Links this expense to a supplier only; it does not create a bill or record a payment."
+      : "No suppliers yet. Add one here; linking an expense does not create a bill or record a payment.";
+  } catch (error) {
+    suppliers = [];
+    document.getElementById("transactionSupplierHelp").textContent = "Supplier choices could not be loaded. Check your connection and supplier database permissions.";
+    console.error("Unable to load suppliers for transactions:", error);
+  }
+  setSupplierOptions(document.getElementById("transactionSupplier"));
+  setSupplierOptions(document.getElementById("editTransactionSupplier"));
   const clientOptions = [{ id: "__new__", label: "Add a new client..." }, ...clients.map((client) => ({ id: client.id, label: client.full_name }))];
   setSelectOptions(document.getElementById("transactionClient"), clientOptions, "Select a client");
   const clientSelect = document.getElementById("transactionClient");
@@ -302,6 +350,75 @@ export async function initTransactions() {
   document.getElementById("transactionForm").addEventListener("reset", () => {
     newClientWrap.classList.add("d-none");
     newClientInput.required = false;
+    document.getElementById("transactionSupplierWrap").classList.add("d-none");
+    document.getElementById("transactionSupplier").value = "";
+  });
+  const transactionType = document.getElementById("transactionType");
+  const transactionSupplier = document.getElementById("transactionSupplier");
+  const transactionSupplierWrap = document.getElementById("transactionSupplierWrap");
+  transactionType.addEventListener("change", () => syncSupplierFields(transactionType, transactionSupplier, transactionSupplierWrap));
+  const editTransactionType = document.getElementById("editTransactionType");
+  const editTransactionSupplier = document.getElementById("editTransactionSupplier");
+  const editSupplierWrap = document.getElementById("editTransactionSupplierWrap");
+  editTransactionType.addEventListener("change", () => syncSupplierFields(editTransactionType, editTransactionSupplier, editSupplierWrap));
+  window.addEventListener("lmg:suppliers-changed", async () => {
+    try {
+      const createSelection = transactionSupplier.value;
+      const editSelection = editTransactionSupplier.value;
+      suppliers = await listActiveSuppliers();
+      setSupplierOptions(transactionSupplier, createSelection);
+      setSupplierOptions(editTransactionSupplier, editSelection);
+    } catch (error) {
+      console.error("Unable to refresh supplier options:", error);
+    }
+  });
+
+  document.getElementById("addSupplierFromTransaction").addEventListener("click", () => {
+    supplierModalTarget = "create";
+    createSupplierModal.show();
+  });
+  document.getElementById("addSupplierFromEdit").addEventListener("click", () => {
+    supplierModalTarget = "edit";
+    createSupplierModal.show();
+  });
+  document.getElementById("createSupplierForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (supplierCreateBusy) return;
+    supplierCreateBusy = true;
+    const form = event.currentTarget;
+    setFormBusy(form, true, "Saving...");
+    try {
+      const supplier = await createSupplierRecord({
+        businessName: document.getElementById("newSupplierBusinessName").value.trim(),
+        contactPerson: document.getElementById("newSupplierContact").value.trim(),
+        phone: document.getElementById("newSupplierPhone").value.trim(),
+        email: document.getElementById("newSupplierEmail").value.trim(),
+        address: document.getElementById("newSupplierAddress").value.trim(),
+        notes: document.getElementById("newSupplierNotes").value.trim(),
+      });
+      suppliers.push(supplier);
+      suppliers.sort((first, second) => first.business_name.localeCompare(second.business_name));
+      const selectedValue = String(supplier.id);
+      setSupplierOptions(transactionSupplier, supplierModalTarget === "create" ? selectedValue : transactionSupplier.value);
+      setSupplierOptions(editTransactionSupplier, supplierModalTarget === "edit" ? selectedValue : editTransactionSupplier.value);
+      if (supplierModalTarget === "edit") {
+        editTransactionType.value = "expense";
+        syncSupplierFields(editTransactionType, editTransactionSupplier, editSupplierWrap);
+      } else {
+        transactionType.value = "expense";
+        syncSupplierFields(transactionType, transactionSupplier, transactionSupplierWrap);
+      }
+      form.reset();
+      supplierCreateBusy = false;
+      createSupplierModal.hide();
+      showNotice("Supplier added and selected for this expense.");
+      window.dispatchEvent(new Event("lmg:suppliers-changed"));
+    } catch (error) {
+      showNotice(error.message || "Unable to create supplier.", "danger");
+    } finally {
+      supplierCreateBusy = false;
+      setFormBusy(form, false);
+    }
   });
   const invoiceOptions = invoices.map((invoice) => ({ id: invoice.id, label: invoice.invoice_number }));
   setSelectOptions(document.getElementById("transactionInvoice"), invoiceOptions, "No linked invoice");
@@ -338,6 +455,8 @@ export async function initTransactions() {
         date: values.date,
         invoiceId: values.invoice_id,
         requestKey: transactionRequestKey,
+        supplierId: values.type === "expense" ? transactionSupplier.value || null : null,
+        supplierName: values.type === "expense" && transactionSupplier.value ? transactionSupplier.selectedOptions[0]?.textContent || null : null,
       });
       transactionRequestKey = makeRequestKey();
       if (values.client_id === "__new__") window.dispatchEvent(new Event("lmg:clients-changed"));
@@ -365,6 +484,8 @@ export async function initTransactions() {
         date: document.getElementById("editTransactionDate").value,
         description: document.getElementById("editTransactionDescription").value.trim(),
         invoiceId: document.getElementById("editTransactionInvoice").value,
+        supplierId: editTransactionType.value === "expense" ? editTransactionSupplier.value || null : null,
+        supplierName: editTransactionType.value === "expense" && editTransactionSupplier.value ? editTransactionSupplier.selectedOptions[0]?.textContent || null : null,
       });
       editModal.hide();
       showNotice("Transaction updated.");

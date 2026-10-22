@@ -39,6 +39,28 @@ function isOnline() {
   return getSyncStatus() !== "offline";
 }
 
+function transactionOfflineRecord(transaction) {
+  const record = {
+    amount: transaction.amount,
+    type: transaction.type,
+    payment_method: transaction.paymentMethod ?? transaction.payment_method ?? null,
+    description: transaction.description || null,
+    date: transaction.date,
+    invoice_id: transaction.invoiceId || transaction.invoice_id || null,
+    supplier_id: transaction.supplierId || transaction.supplier_id || null,
+    supplier_name: transaction.supplierName ?? transaction.supplier_name ?? null,
+  };
+  if (transaction.id !== undefined) record.id = transaction.id;
+  if (transaction.clientId !== undefined || transaction.client_id !== undefined) {
+    record.client_id = transaction.clientId ?? transaction.client_id;
+  }
+  if (transaction.clientName !== undefined || transaction.client_name !== undefined) {
+    record.client_name = transaction.clientName ?? transaction.client_name;
+  }
+  if (transaction.clients !== undefined) record.clients = transaction.clients;
+  return record;
+}
+
 export async function listClients({ query = "", limit = 25, page = 1 } = {}) {
   if (!isOnline()) {
     return await listClientsOffline({ query, limit, page });
@@ -204,10 +226,30 @@ export async function listTransactions(limit = 100) {
 
   return unwrap(await getSupabase()
     .from("transactions")
-    .select("id, client_id, type, amount, date, payment_method, description, invoice_id, clients(full_name), invoices(invoice_number)")
+    .select("id, client_id, type, amount, date, payment_method, description, invoice_id, supplier_id, clients(full_name), invoices(invoice_number), suppliers(business_name, status)")
     .order("date", { ascending: false })
     .order("id", { ascending: false })
     .limit(limit));
+}
+
+export async function listActiveSuppliers() {
+  return unwrap(await getSupabase().from("suppliers")
+    .select("id, business_name, status")
+    .eq("status", "active")
+    .order("business_name", { ascending: true }));
+}
+
+export async function createSupplierRecord(supplier) {
+  const result = unwrap(await getSupabase().rpc("create_supplier_record", {
+    p_business_name: supplier.businessName,
+    p_contact_person: supplier.contactPerson || null,
+    p_phone: supplier.phone || null,
+    p_email: supplier.email || null,
+    p_address: supplier.address || null,
+    p_category: supplier.category || null,
+    p_notes: supplier.notes || null,
+  }));
+  return { id: result, business_name: supplier.businessName, status: "active" };
 }
 
 export async function createTransaction(transaction) {
@@ -225,10 +267,10 @@ export async function createTransaction(transaction) {
     });
   }
   if (!isOnline()) {
-    return await createTransactionOffline(transaction);
+    return await createTransactionOffline(transactionOfflineRecord(transaction));
   }
 
-  return unwrap(await getSupabase().rpc("create_transaction", {
+  return unwrap(await getSupabase().rpc("create_transaction_with_supplier", {
     p_client_id: transaction.clientId,
     p_client_name: transaction.clientName || null,
     p_amount: transaction.amount,
@@ -237,15 +279,16 @@ export async function createTransaction(transaction) {
     p_description: transaction.description || null,
     p_date: transaction.date,
     p_invoice_id: transaction.invoiceId || null,
+    p_supplier_id: transaction.supplierId || null,
   }));
 }
 
 export async function updateTransaction(transaction) {
   if (!isOnline()) {
-    return await updateTransactionOffline(transaction, transaction.id);
+    return await updateTransactionOffline(transactionOfflineRecord(transaction), transaction.id);
   }
 
-  return unwrap(await getSupabase().rpc("update_transaction", {
+  return unwrap(await getSupabase().rpc("update_transaction_with_supplier", {
     p_id: transaction.id,
     p_amount: transaction.amount,
     p_type: transaction.type,
@@ -253,6 +296,7 @@ export async function updateTransaction(transaction) {
     p_description: transaction.description || null,
     p_date: transaction.date,
     p_invoice_id: transaction.invoiceId || null,
+    p_supplier_id: transaction.supplierId || null,
   }));
 }
 
