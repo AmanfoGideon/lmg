@@ -5,6 +5,8 @@ import { setEmptyRow, setFormBusy, showNotice } from "./feedback.js";
 let suppliers = [];
 let supplierBalances = new Map();
 let supplierBalancesAvailable = true;
+let supplierSpending = new Map();
+let supplierSpendingAvailable = true;
 let activeUserId = null;
 
 const money = (amount) => `${globalThis.APP_CONFIG?.currencySymbol || "GH₵"}${Number(amount || 0).toFixed(2)}`;
@@ -44,17 +46,19 @@ function renderSuppliers(query = "") {
 
   document.getElementById("supplierCount").textContent = `${filtered.length} of ${suppliers.length} supplier${suppliers.length === 1 ? "" : "s"}`;
   if (!filtered.length) {
-    setEmptyRow(body, 7, term ? "No suppliers match this search." : "No suppliers yet. Add your first supplier using the form.");
+    setEmptyRow(body, 8, term ? "No suppliers match this search." : "No suppliers yet. Add your first supplier using the form.");
     return;
   }
 
   body.replaceChildren(...filtered.map((supplier) => {
     const row = document.createElement("tr");
     const balance = supplierBalances.get(String(supplier.id)) || { outstanding: 0, overdue: 0 };
+    const totalSpent = supplierSpending.get(String(supplier.id)) || 0;
     const values = [
       supplier.business_name,
       [supplier.contact_person, supplier.phone].filter(Boolean).join(" · "),
       supplier.category || "—",
+      supplierSpendingAvailable ? money(totalSpent) : "—",
       supplierBalancesAvailable ? money(balance.outstanding) : "—",
       supplierBalancesAvailable ? money(balance.overdue) : "—",
       supplier.status === "active" ? "Active" : "Inactive",
@@ -62,8 +66,8 @@ function renderSuppliers(query = "") {
     values.forEach((value, index) => {
       const cell = document.createElement("td");
       cell.textContent = value;
-      if (index === 3 || index === 4) cell.classList.add("text-nowrap");
-      if (index === 5) {
+      if (index >= 3 && index <= 5) cell.classList.add("text-nowrap");
+      if (index === 6) {
         const badge = document.createElement("span");
         badge.className = `badge ${supplier.status === "active" ? "text-bg-success" : "text-bg-secondary"}`;
         badge.textContent = value;
@@ -92,7 +96,7 @@ function renderSuppliers(query = "") {
 
 async function loadSuppliers() {
   const body = document.getElementById("supplierRows");
-  setEmptyRow(body, 7, "Loading suppliers...");
+  setEmptyRow(body, 8, "Loading suppliers...");
   try {
     const client = getSupabase();
     const { data: supplierRows, error: supplierError } = await client.from("suppliers")
@@ -101,34 +105,45 @@ async function loadSuppliers() {
     if (supplierError) throw supplierError;
     suppliers = supplierRows || [];
     supplierBalances = new Map();
-    const { data: bills, error: billError } = await client.from("supplier_bills")
-      .select("supplier_id, total, status, due_date, supplier_payment_allocations(amount, reversed_at)");
+    supplierSpending = new Map();
+    const [{ data: spendingRows, error: spendingError }, { data: bills, error: billError }] = await Promise.all([
+      client.rpc("get_supplier_spending_totals"),
+      client.from("supplier_bills")
+        .select("supplier_id, total, status, due_date, supplier_payment_allocations(amount, reversed_at)"),
+    ]);
+    supplierSpendingAvailable = !spendingError;
+    if (spendingError) {
+      console.error("Supplier records loaded, but expense totals could not be loaded:", spendingError);
+    } else {
+      (spendingRows || []).forEach((row) => supplierSpending.set(String(row.supplier_id), Number(row.total_spent || 0)));
+    }
     if (billError) {
       supplierBalancesAvailable = false;
       console.error("Supplier records loaded, but payable balances could not be loaded:", billError);
-      renderSuppliers(document.getElementById("supplierSearch").value);
-      showNotice("Supplier records loaded, but payable balances are unavailable. Apply the latest supplier migrations and access grants.", "warning");
-      return;
+    } else {
+      supplierBalancesAvailable = true;
+      const today = new Date().toISOString().slice(0, 10);
+      (bills || []).forEach((bill) => {
+        if (bill.status === "cancelled") return;
+        const paid = (bill.supplier_payment_allocations || [])
+          .filter((allocation) => !allocation.reversed_at)
+          .reduce((total, allocation) => total + Number(allocation.amount || 0), 0);
+        const outstanding = Math.max(0, Number(bill.total || 0) - paid);
+        const balance = supplierBalances.get(String(bill.supplier_id)) || { outstanding: 0, overdue: 0 };
+        balance.outstanding += outstanding;
+        if (outstanding > 0 && bill.due_date && bill.due_date < today) balance.overdue += outstanding;
+        supplierBalances.set(String(bill.supplier_id), balance);
+      });
     }
-
-    supplierBalancesAvailable = true;
-    const today = new Date().toISOString().slice(0, 10);
-    (bills || []).forEach((bill) => {
-      if (bill.status === "cancelled") return;
-      const paid = (bill.supplier_payment_allocations || [])
-        .filter((allocation) => !allocation.reversed_at)
-        .reduce((total, allocation) => total + Number(allocation.amount || 0), 0);
-      const outstanding = Math.max(0, Number(bill.total || 0) - paid);
-      const balance = supplierBalances.get(String(bill.supplier_id)) || { outstanding: 0, overdue: 0 };
-      balance.outstanding += outstanding;
-      if (outstanding > 0 && bill.due_date && bill.due_date < today) balance.overdue += outstanding;
-      supplierBalances.set(String(bill.supplier_id), balance);
-    });
     renderSuppliers(document.getElementById("supplierSearch").value);
+    if (!supplierSpendingAvailable || !supplierBalancesAvailable) {
+      showNotice("Supplier records loaded, but some totals are unavailable. Check the latest database migrations and access grants.", "warning");
+    }
   } catch (error) {
     supplierBalancesAvailable = false;
+    supplierSpendingAvailable = false;
     console.error("Supplier records could not be loaded:", error);
-    setEmptyRow(body, 7, `Unable to load suppliers: ${error.message || "Check Supabase table permissions and migrations."}`);
+    setEmptyRow(body, 8, `Unable to load suppliers: ${error.message || "Check Supabase table permissions and migrations."}`);
     document.getElementById("supplierCount").textContent = "Supplier data unavailable";
     showNotice(error.message || "Unable to load suppliers.", "danger");
   }
@@ -201,5 +216,7 @@ export async function initSuppliers() {
   document.getElementById("cancelSupplierEdit").addEventListener("click", resetSupplierForm);
   document.getElementById("supplierSearch").addEventListener("input", (event) => renderSuppliers(event.currentTarget.value));
   window.addEventListener("lmg:suppliers-changed", loadSuppliers);
+  window.addEventListener("lmg:transactions-changed", loadSuppliers);
+  window.addEventListener("sync-complete", loadSuppliers);
   await loadSuppliers();
 }

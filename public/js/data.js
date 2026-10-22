@@ -271,7 +271,7 @@ export async function createTransaction(transaction) {
   }
 
   return unwrap(await getSupabase().rpc("create_transaction_with_supplier", {
-    p_client_id: transaction.clientId,
+    p_client_id: transaction.clientId ?? null,
     p_client_name: transaction.clientName || null,
     p_amount: transaction.amount,
     p_type: transaction.type,
@@ -290,6 +290,7 @@ export async function updateTransaction(transaction) {
 
   return unwrap(await getSupabase().rpc("update_transaction_with_supplier", {
     p_id: transaction.id,
+    p_client_id: transaction.clientId ?? null,
     p_amount: transaction.amount,
     p_type: transaction.type,
     p_payment_method: transaction.paymentMethod || null,

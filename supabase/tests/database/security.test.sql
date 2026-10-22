@@ -1,6 +1,6 @@
 begin;
 
-select plan(23);
+select plan(34);
 
 select ok((select relrowsecurity from pg_class where oid = 'public.profiles'::regclass), 'profiles has RLS enabled');
 select ok((select relrowsecurity from pg_class where oid = 'public.clients'::regclass), 'clients has RLS enabled');
@@ -11,6 +11,17 @@ select ok((select relrowsecurity from pg_class where oid = 'public.products'::re
 select ok((select relrowsecurity from pg_class where oid = 'public.client_interactions'::regclass), 'client_interactions has RLS enabled');
 select ok((select relrowsecurity from pg_class where oid = 'public.user_logs'::regclass), 'user_logs has RLS enabled');
 select ok((select relrowsecurity from pg_class where oid = 'public.sms_messages'::regclass), 'sms_messages has RLS enabled');
+select ok((select relrowsecurity from pg_class where oid = 'public.suppliers'::regclass), 'suppliers has RLS enabled');
+select ok((select relrowsecurity from pg_class where oid = 'public.supplier_bills'::regclass), 'supplier bills have RLS enabled');
+select ok((select relrowsecurity from pg_class where oid = 'public.supplier_payments'::regclass), 'supplier payments have RLS enabled');
+select ok((select relrowsecurity from pg_class where oid = 'public.supplier_payment_allocations'::regclass), 'supplier allocations have RLS enabled');
+select ok(exists (select 1 from pg_trigger where tgrelid = 'public.transactions'::regclass and tgname = 'transactions_guard_invoice_payment' and not tgisinternal), 'invoice payment rows are protected from edits and deletion');
+select ok(exists (select 1 from pg_trigger where tgrelid = 'public.invoices'::regclass and tgname = 'invoices_guard_payment_status' and not tgisinternal), 'invoice status and paid details are database-protected');
+select ok((select confdeltype = 'r' from pg_constraint where conrelid = 'public.transactions'::regclass and conname = 'transactions_invoice_id_fkey'), 'invoice deletion cannot cascade into transaction history');
+select ok(not (select attnotnull from pg_attribute where attrelid = 'public.transactions'::regclass and attname = 'client_id'), 'transaction client references can be null where business rules allow');
+select ok(has_function_privilege('authenticated', 'public.get_supplier_spending_totals()', 'EXECUTE'), 'authenticated users can read RLS-filtered supplier spending totals');
+select ok(not has_function_privilege('anon', 'public.get_supplier_spending_totals()', 'EXECUTE'), 'anonymous users cannot read supplier spending totals');
+select ok(exists (select 1 from pg_indexes where schemaname = 'public' and indexname = 'transactions_supplier_expense_idx'), 'supplier expense aggregation has a partial lookup index');
 
 select ok(not has_function_privilege('anon', 'public.create_invoice(bigint, text, date, date, numeric, text, jsonb)', 'EXECUTE'), 'anonymous users cannot create invoices');
 select ok(has_function_privilege('authenticated', 'public.create_invoice(bigint, text, date, date, numeric, text, jsonb)', 'EXECUTE'), 'authenticated members can create invoices');

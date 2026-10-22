@@ -57,6 +57,10 @@ function syncSupplierFields(type, select, wrapper) {
   if (!isExpense) select.value = "";
 }
 
+function syncClientRequirement(type, supplier, client) {
+  client.required = !(type.value === "expense" && supplier.value);
+}
+
 // Receipts open on about:blank, so relative asset paths must be resolved against
 // the application URL before they are written into the popup.
 const assetUrl = (path) => new URL(path, document.baseURI).href;
@@ -271,6 +275,7 @@ function renderTransactions(query = "") {
       try {
         await removeTransaction(transaction.id);
         showNotice("Transaction deleted.");
+        window.dispatchEvent(new Event("lmg:transactions-changed"));
         await loadTransactions();
       } catch (error) {
         showNotice(error.message || "Unable to delete transaction.", "danger");
@@ -286,7 +291,7 @@ function renderTransactions(query = "") {
 
 function openEdit(transaction) {
   document.getElementById("editTransactionId").value = transaction.id;
-  document.getElementById("editTransactionClient").value = transaction.clients?.full_name || "";
+  document.getElementById("editTransactionClient").value = transaction.client_id || "";
   document.getElementById("editTransactionAmount").value = transaction.amount;
   document.getElementById("editTransactionType").value = transaction.type;
   const editSupplier = document.getElementById("editTransactionSupplier");
@@ -297,6 +302,7 @@ function openEdit(transaction) {
   } : null);
   setSupplierOptions(editSupplier, transaction.supplier_id || "", currentSupplier);
   syncSupplierFields(document.getElementById("editTransactionType"), editSupplier, document.getElementById("editTransactionSupplierWrap"));
+  syncClientRequirement(document.getElementById("editTransactionType"), editSupplier, document.getElementById("editTransactionClient"));
   document.getElementById("editTransactionMethod").value = transaction.payment_method || "";
   document.getElementById("editTransactionDate").value = transaction.date;
   document.getElementById("editTransactionDescription").value = transaction.description || "";
@@ -340,27 +346,41 @@ export async function initTransactions() {
   const clientOptions = [{ id: "__new__", label: "Add a new client..." }, ...clients.map((client) => ({ id: client.id, label: client.full_name }))];
   setSelectOptions(document.getElementById("transactionClient"), clientOptions, "Select a client");
   const clientSelect = document.getElementById("transactionClient");
+  const editClientSelect = document.getElementById("editTransactionClient");
+  const editClientOptions = clients.map((client) => ({ id: client.id, label: client.full_name }));
+  setSelectOptions(editClientSelect, editClientOptions, "No client");
   const newClientWrap = document.getElementById("transactionNewClientWrap");
   const newClientInput = document.getElementById("transactionNewClient");
   clientSelect.addEventListener("change", () => {
     const isNew = clientSelect.value === "__new__";
     newClientWrap.classList.toggle("d-none", !isNew);
     newClientInput.required = isNew;
+    if (!isNew) newClientInput.value = "";
   });
   document.getElementById("transactionForm").addEventListener("reset", () => {
     newClientWrap.classList.add("d-none");
     newClientInput.required = false;
     document.getElementById("transactionSupplierWrap").classList.add("d-none");
     document.getElementById("transactionSupplier").value = "";
+    setTimeout(() => syncClientRequirement(transactionType, transactionSupplier, clientSelect), 0);
   });
   const transactionType = document.getElementById("transactionType");
   const transactionSupplier = document.getElementById("transactionSupplier");
   const transactionSupplierWrap = document.getElementById("transactionSupplierWrap");
-  transactionType.addEventListener("change", () => syncSupplierFields(transactionType, transactionSupplier, transactionSupplierWrap));
+  syncClientRequirement(transactionType, transactionSupplier, clientSelect);
+  transactionType.addEventListener("change", () => {
+    syncSupplierFields(transactionType, transactionSupplier, transactionSupplierWrap);
+    syncClientRequirement(transactionType, transactionSupplier, clientSelect);
+  });
+  transactionSupplier.addEventListener("change", () => syncClientRequirement(transactionType, transactionSupplier, clientSelect));
   const editTransactionType = document.getElementById("editTransactionType");
   const editTransactionSupplier = document.getElementById("editTransactionSupplier");
   const editSupplierWrap = document.getElementById("editTransactionSupplierWrap");
-  editTransactionType.addEventListener("change", () => syncSupplierFields(editTransactionType, editTransactionSupplier, editSupplierWrap));
+  editTransactionType.addEventListener("change", () => {
+    syncSupplierFields(editTransactionType, editTransactionSupplier, editSupplierWrap);
+    syncClientRequirement(editTransactionType, editTransactionSupplier, editClientSelect);
+  });
+  editTransactionSupplier.addEventListener("change", () => syncClientRequirement(editTransactionType, editTransactionSupplier, editClientSelect));
   window.addEventListener("lmg:suppliers-changed", async () => {
     try {
       const createSelection = transactionSupplier.value;
@@ -404,9 +424,11 @@ export async function initTransactions() {
       if (supplierModalTarget === "edit") {
         editTransactionType.value = "expense";
         syncSupplierFields(editTransactionType, editTransactionSupplier, editSupplierWrap);
+        syncClientRequirement(editTransactionType, editTransactionSupplier, editClientSelect);
       } else {
         transactionType.value = "expense";
         syncSupplierFields(transactionType, transactionSupplier, transactionSupplierWrap);
+        syncClientRequirement(transactionType, transactionSupplier, clientSelect);
       }
       form.reset();
       supplierCreateBusy = false;
@@ -429,6 +451,8 @@ export async function initTransactions() {
       { id: "__new__", label: "Add a new client..." },
       ...clients.map((client) => ({ id: client.id, label: client.full_name })),
     ], "Select a client", selected);
+    const selectedEditClient = editClientSelect.value;
+    setSelectOptions(editClientSelect, clients.map((client) => ({ id: client.id, label: client.full_name })), "No client", selectedEditClient);
   });
   window.addEventListener("lmg:invoices-changed", async () => {
     invoices = await listInvoices();
@@ -446,7 +470,7 @@ export async function initTransactions() {
     try {
       const values = Object.fromEntries(new FormData(form));
       await createTransaction({
-        clientId: values.client_id === "__new__" ? null : Number(values.client_id),
+        clientId: values.client_id && values.client_id !== "__new__" ? Number(values.client_id) : null,
         clientName: values.client_name?.trim(),
         amount: Number(values.amount),
         type: values.type,
@@ -463,6 +487,7 @@ export async function initTransactions() {
       form.reset();
       document.getElementById("transactionDate").value = new Date().toISOString().slice(0, 10);
       showNotice("Transaction added.");
+      window.dispatchEvent(new Event("lmg:transactions-changed"));
       await loadTransactions();
     } catch (error) {
       showNotice(error.message || "Unable to add transaction.", "danger");
@@ -478,6 +503,7 @@ export async function initTransactions() {
     try {
       await updateTransaction({
         id: Number(document.getElementById("editTransactionId").value),
+        clientId: editClientSelect.value ? Number(editClientSelect.value) : null,
         amount: Number(document.getElementById("editTransactionAmount").value),
         type: document.getElementById("editTransactionType").value,
         paymentMethod: document.getElementById("editTransactionMethod").value,
@@ -489,6 +515,7 @@ export async function initTransactions() {
       });
       editModal.hide();
       showNotice("Transaction updated.");
+      window.dispatchEvent(new Event("lmg:transactions-changed"));
       await loadTransactions();
     } catch (error) {
       showNotice(error.message || "Unable to update transaction.", "danger");

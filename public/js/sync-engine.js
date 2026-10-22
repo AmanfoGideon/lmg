@@ -383,7 +383,7 @@ async function syncTransaction(supabase, item) {
     // Use RPC function with idempotency key
     const { data: result, error } = await supabase.rpc("create_transaction_with_supplier_offline", {
       p_idempotency_key: idempotencyKey,
-      p_client_id: data.client_id ?? data.clientId,
+      p_client_id: data.client_id !== undefined ? data.client_id : (data.clientId ?? null),
       p_client_name: data.client_name ?? data.clientName,
       p_amount: data.amount,
       p_type: data.type,
@@ -418,6 +418,7 @@ async function syncTransaction(supabase, item) {
 
     const { data: result, error } = await supabase.rpc("update_transaction_with_supplier", {
       p_id: item.server_id,
+      p_client_id: data.client_id !== undefined ? data.client_id : (data.clientId ?? null),
       p_amount: data.amount,
       p_type: data.type,
       p_payment_method: data.payment_method ?? data.paymentMethod ?? null,

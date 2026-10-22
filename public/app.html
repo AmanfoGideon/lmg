@@ -271,7 +271,7 @@
             <div class="card p-3">
               <h2 class="h6 mb-3">Add Transaction</h2>
               <form id="transactionForm" class="row g-2">
-                <div class="col-12"><label class="form-label" for="transactionClient">Client</label><select class="form-select" id="transactionClient" name="client_id" required></select></div>
+                <div class="col-12"><label class="form-label" for="transactionClient">Client (optional for supplier expenses)</label><select class="form-select" id="transactionClient" name="client_id"></select></div>
                 <div class="col-12 d-none" id="transactionNewClientWrap"><label class="form-label" for="transactionNewClient">New client name</label><input class="form-control" id="transactionNewClient" name="client_name" maxlength="255"></div>
                 <div class="col-md-6"><label class="form-label" for="transactionAmount">Amount</label><input class="form-control" id="transactionAmount" name="amount" type="number" step="0.01" required></div>
                 <div class="col-md-6"><label class="form-label" for="transactionType">Type</label><select class="form-select" id="transactionType" name="type"><option value="income">Income</option><option value="expense">Expense</option><option value="invoice">Invoice</option><option value="payment">Payment</option></select></div>
@@ -312,7 +312,7 @@
                 <div><h2 class="h6 mb-1">Supplier Accounts</h2><small id="supplierCount" class="text-muted" aria-live="polite">Loading suppliers...</small></div>
                 <input id="supplierSearch" class="form-control form-control-sm" type="search" placeholder="Search suppliers" aria-label="Search suppliers" style="max-width:280px">
               </div>
-              <div class="table-responsive"><table class="table table-sm table-brand align-middle"><thead><tr><th>Supplier</th><th>Contact</th><th>Category</th><th>Outstanding</th><th>Overdue</th><th>Status</th><th>Actions</th></tr></thead><tbody id="supplierRows"><tr><td colspan="7" class="text-muted">Loading suppliers...</td></tr></tbody></table></div>
+              <div class="table-responsive"><table class="table table-sm table-brand align-middle"><thead><tr><th>Supplier</th><th>Contact</th><th>Category</th><th>Total Amount Spent</th><th>Outstanding</th><th>Overdue</th><th>Status</th><th>Actions</th></tr></thead><tbody id="supplierRows"><tr><td colspan="8" class="text-muted">Loading suppliers...</td></tr></table></div>
             </div>
           </div>
         </div>
@@ -430,7 +430,7 @@
       <div class="modal-header"><h2 class="modal-title h5">Edit Transaction</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
       <div class="modal-body row g-2">
         <input id="editTransactionId" type="hidden">
-        <div class="col-12"><label class="form-label" for="editTransactionClient">Client</label><input class="form-control" id="editTransactionClient" disabled></div>
+        <div class="col-12"><label class="form-label" for="editTransactionClient">Client</label><select class="form-select" id="editTransactionClient"></select></div>
         <div class="col-md-6"><label class="form-label" for="editTransactionAmount">Amount</label><input class="form-control" id="editTransactionAmount" type="number" step="0.01" required></div>
         <div class="col-md-6"><label class="form-label" for="editTransactionType">Type</label><select class="form-select" id="editTransactionType"><option value="income">Income</option><option value="expense">Expense</option><option value="invoice">Invoice</option><option value="payment">Payment</option></select></div>
         <div class="col-12 d-none" id="editTransactionSupplierWrap"><label class="form-label" for="editTransactionSupplier">Supplier (optional)</label><div class="input-group"><select class="form-select" id="editTransactionSupplier"><option value="">No supplier</option></select><button class="btn btn-outline-light" id="addSupplierFromEdit" type="button"><i class="bi bi-plus-lg"></i> Add New Supplier</button></div></div>
