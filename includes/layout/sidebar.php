@@ -4,7 +4,8 @@ $active_page = $active_page ?? '';
 $current = basename($_SERVER['PHP_SELF']);
 $dashActive = ($active_page==='dashboard' || $current==='dashboard.php') ? ' active' : '';
 $clientsActive = ($active_page==='clients' || $current==='clients.php') ? ' active' : '';
-$suppliersActive = ($active_page==='suppliers' || $current==='suppliers.php' || $current==='supplier_bills.php' || $current==='supplier_payments.php') ? ' active' : '';
+$supplierPages = ['suppliers.php', 'supplier_bills.php', 'supplier_payments.php', 'supplier_reports.php', 'supplier_statement.php'];
+$suppliersActive = ($active_page==='suppliers' || in_array($current, $supplierPages, true)) ? ' active' : '';
 $txActive = ($active_page==='transactions' || $current==='transactions.php') ? ' active' : '';
 $smsActive = ($active_page==='sms' || $current==='sms.php') ? ' active' : '';
 $productsActive = ($active_page==='products' || $current==='products.php') ? ' active' : '';
@@ -49,7 +50,7 @@ $openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='re
         <a href="clients.php" class="nav-link<?= $clientsActive ?>" title="Clients"<?= $clientsActive ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-people"></i> <span class="nav-text">Clients</span>
         </a>
-        <a href="suppliers.php" class="nav-link<?= $suppliersActive ?>" title="Suppliers"<?= $suppliersActive ? ' aria-current="page"' : '' ?>>
+        <a href="suppliers.php" class="nav-link<?= $suppliersActive ?>" title="Suppliers"<?= $current==='suppliers.php' ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-truck"></i> <span class="nav-text">Suppliers</span>
         </a>
         <a href="supplier_bills.php" class="nav-link<?= ($current==='supplier_bills.php')?' active':'' ?>" title="Supplier Bills"<?= ($current==='supplier_bills.php')?' aria-current="page"':'' ?>>
