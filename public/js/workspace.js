@@ -7,6 +7,7 @@ import { initInvoices } from "./invoices-view.js";
 import { initProducts } from "./products.js";
 import { initReports } from "./reports-view.js";
 import { initSms } from "./sms-view.js";
+import { initSuppliers } from "./suppliers-view.js";
 import { initTransactions } from "./transactions-view.js";
 import { initUsers } from "./users-view.js";
 import { initBackup } from "./backup-view.js";
@@ -20,6 +21,7 @@ const titles = {
   clients: ["Clients", "Manage client records"],
   products: ["Products", "Manage inventory and stock levels"],
   transactions: ["Transactions", "Record income, expenses, invoices and payments"],
+  suppliers: ["Suppliers", "Manage supplier records and accounts payable"],
   invoices: ["Invoices", "Create invoices and track payments"],
   reports: ["Financial Reports", "Daily, weekly and monthly summaries"],
   sms: ["SMS", "Send and track messages"],
@@ -35,6 +37,7 @@ const viewInits = {
   clients: initClients,
   products: initProducts,
   transactions: initTransactions,
+  suppliers: initSuppliers,
   invoices: initInvoices,
   reports: initReports,
   sms: initSms,
@@ -55,7 +58,7 @@ async function ensureView(view) {
   }
 }
 
-async function navigate(view) {
+async function navigate(view, pushHistory = true) {
   if (!titles[view]) return;
   document.querySelectorAll(".app-view").forEach((section) => {
     section.classList.toggle("d-none", section.id !== `view-${view}`);
@@ -68,7 +71,10 @@ async function navigate(view) {
   });
   document.getElementById("pageTitle").textContent = titles[view][0];
   document.getElementById("pageSubtitle").textContent = titles[view][1];
-  history.replaceState(null, "", `#${view}`);
+  if (window.location.hash !== `#${view}`) {
+    if (pushHistory) history.pushState({ view }, "", `#${view}`);
+    else history.replaceState({ view }, "", `#${view}`);
+  }
   await ensureView(view);
 }
 
@@ -85,6 +91,11 @@ document.querySelectorAll("[data-view-link]").forEach((link) => {
     event.preventDefault();
     navigate(link.dataset.viewLink);
   });
+});
+
+window.addEventListener("popstate", () => {
+  const view = window.location.hash.slice(1);
+  if (titles[view]) navigate(view, false);
 });
 
 document.getElementById("signOutButton").addEventListener("click", async () => {
@@ -169,7 +180,7 @@ try {
   });
 
   const initial = window.location.hash.slice(1);
-  await navigate(titles[initial] ? initial : "dashboard");
+  await navigate(titles[initial] ? initial : "dashboard", false);
   hideLoadingScreen();
 } catch (error) {
   hideLoadingScreen();

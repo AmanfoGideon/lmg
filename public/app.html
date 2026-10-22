@@ -64,6 +64,7 @@
         <a class="nav-link" href="#clients" data-view-link="clients"><i class="bi bi-people"></i><span class="nav-text">Clients</span></a>
         <a class="nav-link" href="#products" data-view-link="products"><i class="bi bi-box-seam"></i><span class="nav-text">Products</span></a>
         <a class="nav-link" href="#transactions" data-view-link="transactions"><i class="bi bi-wallet2"></i><span class="nav-text">Transactions</span></a>
+        <a class="nav-link" href="#suppliers" data-view-link="suppliers"><i class="bi bi-truck"></i><span class="nav-text">Suppliers</span></a>
         <a class="nav-link" href="#invoices" data-view-link="invoices"><i class="bi bi-receipt"></i><span class="nav-text">Invoices</span></a>
         <a class="nav-link" href="#reports" data-view-link="reports"><i class="bi bi-bar-chart-line"></i><span class="nav-text">Reports</span></a>
         <a class="nav-link" href="#sms" data-view-link="sms"><i class="bi bi-chat-dots"></i><span class="nav-text">SMS</span></a>
@@ -283,6 +284,36 @@
             </div>
           </div>
           <div class="col-lg-8"><div class="card p-3"><div class="d-flex justify-content-between mb-3"><h2 class="h6 mb-0">Recent Transactions</h2><input class="form-control form-control-sm" id="transactionSearch" type="search" placeholder="Search transactions" style="max-width:260px"></div><div class="table-responsive"><table class="table table-sm table-brand align-middle"><thead><tr><th>Client</th><th>Type</th><th>Invoice</th><th>Amount</th><th>Date</th><th>Method</th><th>Description</th><th>Actions</th></tr></thead><tbody id="transactionRows"></tbody></table></div></div></div>
+        </div>
+      </section>
+
+      <section id="view-suppliers" class="app-view d-none">
+        <div class="row g-3">
+          <div class="col-xl-4">
+            <div class="card p-3">
+              <h2 id="supplierFormTitle" class="h6 mb-3">Add Supplier</h2>
+              <form id="supplierForm" class="row g-2">
+                <input id="supplierId" type="hidden">
+                <div class="col-12"><label class="form-label" for="supplierBusinessName">Business name</label><input class="form-control" id="supplierBusinessName" maxlength="255" required></div>
+                <div class="col-12"><label class="form-label" for="supplierContactPerson">Contact person</label><input class="form-control" id="supplierContactPerson" maxlength="255"></div>
+                <div class="col-md-6"><label class="form-label" for="supplierPhone">Phone</label><input class="form-control" id="supplierPhone" maxlength="50"></div>
+                <div class="col-md-6"><label class="form-label" for="supplierEmail">Email</label><input class="form-control" id="supplierEmail" type="email" maxlength="255"></div>
+                <div class="col-12"><label class="form-label" for="supplierCategory">Category</label><input class="form-control" id="supplierCategory" maxlength="100"></div>
+                <div class="col-12"><label class="form-label" for="supplierAddress">Address</label><textarea class="form-control" id="supplierAddress" rows="2"></textarea></div>
+                <div class="col-12"><label class="form-label" for="supplierNotes">Notes</label><textarea class="form-control" id="supplierNotes" rows="2"></textarea></div>
+                <div class="col-12 d-flex gap-2"><button class="btn btn-primary flex-grow-1" type="submit">Save Supplier</button><button class="btn btn-outline-light d-none" id="cancelSupplierEdit" type="button">Cancel</button></div>
+              </form>
+            </div>
+          </div>
+          <div class="col-xl-8">
+            <div class="card p-3">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                <div><h2 class="h6 mb-1">Supplier Accounts</h2><small id="supplierCount" class="text-muted" aria-live="polite">Loading suppliers...</small></div>
+                <input id="supplierSearch" class="form-control form-control-sm" type="search" placeholder="Search suppliers" aria-label="Search suppliers" style="max-width:280px">
+              </div>
+              <div class="table-responsive"><table class="table table-sm table-brand align-middle"><thead><tr><th>Supplier</th><th>Contact</th><th>Category</th><th>Outstanding</th><th>Overdue</th><th>Status</th><th>Actions</th></tr></thead><tbody id="supplierRows"><tr><td colspan="7" class="text-muted">Loading suppliers...</td></tr></tbody></table></div>
+            </div>
+          </div>
         </div>
       </section>
 
