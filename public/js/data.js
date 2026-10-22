@@ -39,6 +39,15 @@ function isOnline() {
   return getSyncStatus() !== "offline";
 }
 
+function normalizeTransactionClientId(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const clientId = Number(value);
+  if (!Number.isSafeInteger(clientId) || clientId <= 0) {
+    throw new Error("Select a valid client or leave it blank for a supplier-linked expense.");
+  }
+  return clientId;
+}
+
 function transactionOfflineRecord(transaction) {
   const record = {
     amount: transaction.amount,
@@ -271,7 +280,7 @@ export async function createTransaction(transaction) {
   }
 
   return unwrap(await getSupabase().rpc("create_transaction_with_supplier", {
-    p_client_id: transaction.clientId ?? null,
+    p_client_id: normalizeTransactionClientId(transaction.clientId),
     p_client_name: transaction.clientName || null,
     p_amount: transaction.amount,
     p_type: transaction.type,
@@ -290,7 +299,7 @@ export async function updateTransaction(transaction) {
 
   return unwrap(await getSupabase().rpc("update_transaction_with_supplier", {
     p_id: transaction.id,
-    p_client_id: transaction.clientId ?? null,
+    p_client_id: normalizeTransactionClientId(transaction.clientId),
     p_amount: transaction.amount,
     p_type: transaction.type,
     p_payment_method: transaction.paymentMethod || null,

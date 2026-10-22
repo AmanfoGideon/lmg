@@ -45,6 +45,9 @@ BEGIN
   IF NOT public.is_active_member() THEN
     RAISE EXCEPTION 'An active authenticated account is required' USING ERRCODE = '42501';
   END IF;
+  IF p_client_id = 0 THEN
+    p_client_id := NULL;
+  END IF;
   IF p_type NOT IN ('income', 'expense', 'invoice', 'payment') THEN
     RAISE EXCEPTION 'Unsupported transaction type' USING ERRCODE = '22023';
   END IF;
@@ -58,6 +61,11 @@ BEGIN
     SELECT 1 FROM public.suppliers WHERE id = p_supplier_id AND status = 'active'
   ) THEN
     RAISE EXCEPTION 'Select an active supplier' USING ERRCODE = '22023';
+  END IF;
+  IF p_client_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM public.clients WHERE id = p_client_id
+  ) THEN
+    RAISE EXCEPTION 'Selected client was not found. Choose a valid client or clear the selection.' USING ERRCODE = '22023';
   END IF;
 
   IF p_client_id IS NULL AND nullif(btrim(p_client_name), '') IS NULL THEN
@@ -112,6 +120,9 @@ BEGIN
   IF NOT public.is_active_member() THEN
     RAISE EXCEPTION 'An active authenticated account is required' USING ERRCODE = '42501';
   END IF;
+  IF p_client_id = 0 THEN
+    p_client_id := NULL;
+  END IF;
   IF p_type NOT IN ('income', 'expense', 'invoice', 'payment') THEN
     RAISE EXCEPTION 'Unsupported transaction type' USING ERRCODE = '22023';
   END IF;
@@ -123,6 +134,11 @@ BEGIN
   END IF;
   IF p_client_id IS NULL AND (p_type <> 'expense' OR p_supplier_id IS NULL) THEN
     RAISE EXCEPTION 'A client is required unless this is a supplier-linked expense' USING ERRCODE = '22023';
+  END IF;
+  IF p_client_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM public.clients WHERE id = p_client_id
+  ) THEN
+    RAISE EXCEPTION 'Selected client was not found. Choose a valid client or clear the selection.' USING ERRCODE = '22023';
   END IF;
 
   SELECT supplier_id INTO v_existing_supplier_id
