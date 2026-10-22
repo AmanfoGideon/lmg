@@ -93,18 +93,21 @@ async function loadSuppliers() {
   setEmptyRow(body, 7, "Loading suppliers...");
   try {
     const client = getSupabase();
-    const [{ data: supplierRows, error: supplierError }, { data: bills, error: billError }] = await Promise.all([
-      client.from("suppliers")
-        .select("id, business_name, contact_person, phone, email, address, category, notes, status, created_at")
-        .order("business_name", { ascending: true }),
-      client.from("supplier_bills")
-        .select("supplier_id, total, status, due_date, supplier_payment_allocations(amount, reversed_at)"),
-    ]);
+    const { data: supplierRows, error: supplierError } = await client.from("suppliers")
+      .select("id, business_name, contact_person, phone, email, address, category, notes, status, created_at")
+      .order("business_name", { ascending: true });
     if (supplierError) throw supplierError;
-    if (billError) throw billError;
-
     suppliers = supplierRows || [];
     supplierBalances = new Map();
+    const { data: bills, error: billError } = await client.from("supplier_bills")
+      .select("supplier_id, total, status, due_date, supplier_payment_allocations(amount, reversed_at)");
+    if (billError) {
+      console.error("Supplier records loaded, but payable balances could not be loaded:", billError);
+      renderSuppliers(document.getElementById("supplierSearch").value);
+      showNotice("Supplier records loaded, but payable balances are unavailable. Apply the latest supplier migrations and access grants.", "warning");
+      return;
+    }
+
     const today = new Date().toISOString().slice(0, 10);
     (bills || []).forEach((bill) => {
       if (bill.status === "cancelled") return;
@@ -119,7 +122,8 @@ async function loadSuppliers() {
     });
     renderSuppliers(document.getElementById("supplierSearch").value);
   } catch (error) {
-    setEmptyRow(body, 7, "Unable to load supplier records. Check the supplier database migration and access policies.");
+    console.error("Supplier records could not be loaded:", error);
+    setEmptyRow(body, 7, `Unable to load suppliers: ${error.message || "Check Supabase table permissions and migrations."}`);
     document.getElementById("supplierCount").textContent = "Supplier data unavailable";
     showNotice(error.message || "Unable to load suppliers.", "danger");
   }
