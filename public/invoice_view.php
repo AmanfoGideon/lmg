@@ -4,53 +4,48 @@ require_once "../includes/db.php";
 require_once "../includes/log.php";
 require_once "../includes/sms.php";
 require_once "../includes/payment_methods.php";
+require_once "../includes/invoice.php";
 
 $id = (int)($_GET['id'] ?? 0);
 $message = '';
+$paymentRequestKey = bin2hex(random_bytes(16));
+$paymentForm = ['amount'=>'', 'payment_method'=>'', 'description'=>'', 'date'=>date('Y-m-d')];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+  $paymentForm = [
+    'amount'=>(string)($_POST['amount'] ?? ''),
+    'payment_method'=>(string)($_POST['payment_method'] ?? ''),
+    'description'=>(string)($_POST['description'] ?? ''),
+    'date'=>(string)($_POST['date'] ?? date('Y-m-d')),
+  ];
+  $postedRequestKey = (string)($_POST['request_key'] ?? '');
+  if (preg_match('/^[a-f0-9]{32}$/', $postedRequestKey)) $paymentRequestKey = $postedRequestKey;
+  if (!csrf_verify()) {
+    $message = 'Invalid request token. Refresh the page and try again.';
+  } else {
   $action = $_POST['action'] ?? '';
   if ($action === 'add_payment') {
     $invoice_id = (int)($_POST['invoice_id'] ?? 0);
-    $client_id = (int)($_POST['client_id'] ?? 0);
-    $amount = (float)($_POST['amount'] ?? 0);
-    $payment_method = $_POST['payment_method'] ?? null;
-    $description = trim($_POST['description'] ?? '');
-    $date = $_POST['date'] ?: date('Y-m-d');
-    if ($payment_method && !in_array($payment_method, ['cash','mobile','card'])) { $payment_method = null; }
-    if ($invoice_id > 0 && $client_id > 0 && $amount > 0) {
-      $check = $conn->prepare("SELECT client_id, total FROM invoices WHERE id=? LIMIT 1");
-      $check->bind_param('i', $invoice_id);
-      $check->execute();
-      $check->bind_result($invClientId,$invTotal);
-      $foundInv = $check->fetch();
-      $check->close();
-      if ($foundInv && (int)$invClientId === $client_id) {
-        $ins = $conn->prepare("INSERT INTO transactions (client_id, amount, type, payment_method, description, date, invoice_id) VALUES (?,?,?,?,?,?,?)");
-        $t = 'payment';
-        $ins->bind_param('idssssi', $client_id, $amount, $t, $payment_method, $description, $date, $invoice_id);
-        $message = $ins->execute() ? 'Payment recorded' : 'Error recording payment';
-        if ($message === 'Payment recorded') {
-          log_action($conn, 'invoice_payment', (string)$invoice_id.'|'.$amount);
-          $sum = $conn->prepare("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE invoice_id=? AND type='payment'");
-          $sum->bind_param('i', $invoice_id);
-          $sum->execute();
-          $sum->bind_result($paidTotal);
-          $sum->fetch();
-          $sum->close();
-          $newStatus = 'unpaid';
-          if ((float)$paidTotal > 0 && (float)$paidTotal < (float)$invTotal) { $newStatus = 'partial'; }
-          if ((float)$paidTotal >= (float)$invTotal) { $newStatus = 'paid'; }
-          $up = $conn->prepare("UPDATE invoices SET status=? WHERE id=?");
-          $up->bind_param('si', $newStatus, $invoice_id);
-          $up->execute();
-          $up->close();
-        }
-        $ins->close();
-      } else {
-        $message = 'Invoice mismatch';
+    try {
+      if ($invoice_id !== $id || $invoice_id <= 0) throw new InvalidArgumentException('Invalid invoice. Refresh and try again.');
+      $result = invoice_record_payment(
+        $conn,
+        $invoice_id,
+        $paymentForm['amount'],
+        $paymentForm['payment_method'] !== '' ? $paymentForm['payment_method'] : null,
+        trim($paymentForm['description']),
+        $paymentForm['date'],
+        $paymentRequestKey
+      );
+      $message = $result['duplicate'] ? 'This payment was already recorded.' : 'Payment recorded.';
+      if (!$result['duplicate']) {
+        $paymentRequestKey = bin2hex(random_bytes(16));
+        $paymentForm = ['amount'=>'', 'payment_method'=>'', 'description'=>'', 'date'=>date('Y-m-d')];
       }
-    } else {
-      $message = 'Enter valid payment details';
+    } catch (InvalidArgumentException $e) {
+      $message = $e->getMessage();
+    } catch (Throwable $e) {
+      $message = 'Payment could not be recorded. Please try again.';
+      error_log('Invoice payment failed: '.$e->getMessage());
     }
   }
   if ($action === 'send_sms') {
@@ -85,13 +80,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       log_action($conn, 'email_send', (string)$id.'|'.$toEmail);
     }
   }
+  }
 }
-$stmt = $conn->prepare("SELECT i.invoice_number, i.invoice_date, i.due_date, i.subtotal, i.tax, i.total, i.status, i.notes, i.client_id, c.full_name, c.email, c.phone, c.address FROM invoices i LEFT JOIN clients c ON c.id=i.client_id WHERE i.id=?");
+$stmt = $conn->prepare("SELECT i.invoice_number, i.invoice_date, i.due_date, i.subtotal, i.tax, i.total, i.status, i.notes, i.client_id, i.cancelled_at, i.cancellation_reason, c.full_name, c.email, c.phone, c.address FROM invoices i LEFT JOIN clients c ON c.id=i.client_id WHERE i.id=?");
 $stmt->bind_param('i', $id);
 $stmt->execute();
-$stmt->bind_result($invoice_number,$invoice_date,$due_date,$subtotal,$tax,$total,$status,$notes,$client_id,$client_name,$client_email,$client_phone,$client_address);
+$stmt->bind_result($invoice_number,$invoice_date,$due_date,$subtotal,$tax,$total,$status,$notes,$client_id,$cancelled_at,$cancellation_reason,$client_name,$client_email,$client_phone,$client_address);
 $found = $stmt->fetch();
 $stmt->close();
+
+$paidTotal = '0.00';
+$balanceDue = '0.00';
+$paymentRows = [];
+if ($found) {
+  $paymentSummary = $conn->prepare("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE invoice_id=? AND type='payment'");
+  $paymentSummary->bind_param('i', $id);
+  $paymentSummary->execute();
+  $paymentSummary->bind_result($paidTotal);
+  $paymentSummary->fetch();
+  $paymentSummary->close();
+  $totalCents = invoice_money_cents((string)$total);
+  $paidCents = invoice_money_cents((string)$paidTotal);
+  if ($totalCents === null || $paidCents === null) throw new RuntimeException('Invoice payment totals are invalid.');
+  $paidTotal = invoice_cents_decimal($paidCents);
+  $balanceDue = invoice_cents_decimal(max(0, $totalCents - $paidCents));
+  $paymentHistory = $conn->prepare("SELECT id, amount, date, payment_method, description FROM transactions WHERE invoice_id=? AND type='payment' ORDER BY date DESC, id DESC");
+  $paymentHistory->bind_param('i', $id);
+  $paymentHistory->execute();
+  $paymentRows = $paymentHistory->get_result()->fetch_all(MYSQLI_ASSOC);
+  $paymentHistory->close();
+}
 
 $items = $conn->prepare("SELECT item_name, quantity, price, total FROM invoice_items WHERE invoice_id=? ORDER BY id ASC");
 $items->bind_param('i', $id);
@@ -157,6 +175,7 @@ $role = $_SESSION['role'] ?? 'staff';
           <div class="text-muted small">Date: <?= htmlspecialchars($invoice_date ?? '') ?></div>
           <div class="text-muted small">Due: <?= htmlspecialchars($due_date ?? '') ?></div>
           <div class="mt-1">Status: <span class="badge bg-<?= $status==='paid'?'success':($status==='partial'?'warning text-dark':'secondary') ?>"><?= htmlspecialchars($status) ?></span></div>
+          <?php if ($cancelled_at !== null): ?><div class="alert alert-warning mt-3 mb-0" role="status"><strong>Cancelled</strong><?= $cancellation_reason ? ': '.htmlspecialchars($cancellation_reason, ENT_QUOTES, 'UTF-8') : '' ?>. Recorded payments remain in the financial history.</div><?php endif; ?>
         </div>
       </div>
 
@@ -200,34 +219,50 @@ $role = $_SESSION['role'] ?? 'staff';
           <div class="d-flex justify-content-between"><div class="text-muted">Subtotal</div><div><?= fmtCurrency((float)$subtotal) ?></div></div>
           <div class="d-flex justify-content-between"><div class="text-muted">Tax</div><div><?= fmtCurrency((float)$tax) ?></div></div>
           <div class="d-flex justify-content-between fw-bold"><div>Total</div><div><?= fmtCurrency((float)$total) ?></div></div>
+          <div class="d-flex justify-content-between"><div class="text-muted">Payments received</div><div><?= fmtCurrency((float)$paidTotal) ?></div></div>
+          <div class="d-flex justify-content-between fw-bold"><div>Balance due</div><div><?= fmtCurrency((float)$balanceDue) ?></div></div>
           <div class="text-muted small mt-3">Payment due within 14 days. Kindly reference the invoice number on payment.</div>
         </div>
       </div>
 
+      <section class="mt-4" aria-labelledby="invoicePaymentHistoryTitle">
+        <h2 id="invoicePaymentHistoryTitle" class="h6">Payment History</h2>
+        <?php if (!$paymentRows): ?>
+          <p class="text-muted small">No payments have been recorded for this invoice.</p>
+        <?php else: ?>
+          <div class="table-responsive"><table class="table table-sm table-brand align-middle">
+            <thead><tr><th>Date</th><th>Reference</th><th>Method</th><th>Description</th><th class="text-end">Amount</th></tr></thead>
+            <tbody><?php foreach ($paymentRows as $payment): ?>
+              <tr><td><?= htmlspecialchars($payment['date'], ENT_QUOTES, 'UTF-8') ?></td><td><a href="receipt_view.php?id=<?= (int)$payment['id'] ?>">RCPT-<?= str_pad((string)$payment['id'], 5, '0', STR_PAD_LEFT) ?></a></td><td><?= htmlspecialchars(payment_method_label($payment['payment_method'] ?? null), ENT_QUOTES, 'UTF-8') ?></td><td><?= htmlspecialchars($payment['description'] ?? '', ENT_QUOTES, 'UTF-8') ?></td><td class="text-end"><?= fmtCurrency((float)$payment['amount']) ?></td></tr>
+            <?php endforeach; ?></tbody>
+          </table></div>
+        <?php endif; ?>
+      </section>
+
       <?php if($notes): ?><div class="mt-3 text-muted small"><?= nl2br(htmlspecialchars($notes)) ?></div><?php endif; ?>
-      <div class="mt-4">
+      <?php if ($cancelled_at === null): ?><div class="mt-4">
         <div class="card p-3">
           <h6 class="mb-3">Record Payment</h6>
           <form method="POST" class="row g-2">
             <?= csrf_input() ?>
             <input type="hidden" name="action" value="add_payment">
             <input type="hidden" name="invoice_id" value="<?= (int)$id ?>">
-            <input type="hidden" name="client_id" value="<?= (int)$client_id ?>">
-            <div class="col-6"><input class="form-control" type="number" step="0.01" name="amount" placeholder="Amount" required></div>
+            <input type="hidden" name="request_key" value="<?= htmlspecialchars($paymentRequestKey, ENT_QUOTES, 'UTF-8') ?>">
+            <div class="col-6"><label class="visually-hidden" for="paymentAmount">Amount</label><input class="form-control" id="paymentAmount" type="number" min="0.01" step="0.01" name="amount" placeholder="Amount" value="<?= htmlspecialchars($paymentForm['amount'], ENT_QUOTES, 'UTF-8') ?>" required></div>
             <div class="col-6">
-              <select class="form-select" name="payment_method">
+              <label class="visually-hidden" for="paymentMethod">Payment method</label><select class="form-select" id="paymentMethod" name="payment_method">
                 <option value="">Payment Method</option>
-                <option value="cash">Cash</option>
-                <option value="mobile">MoMo</option>
-                <option value="card">Card</option>
+                <option value="cash" <?= $paymentForm['payment_method']==='cash'?'selected':'' ?>>Cash</option>
+                <option value="mobile" <?= $paymentForm['payment_method']==='mobile'?'selected':'' ?>>MoMo</option>
+                <option value="card" <?= $paymentForm['payment_method']==='card'?'selected':'' ?>>Card</option>
               </select>
             </div>
-            <div class="col-6"><input class="form-control" type="date" name="date" value="<?= date('Y-m-d') ?>"></div>
-            <div class="col-12"><textarea class="form-control" name="description" placeholder="Description"></textarea></div>
+            <div class="col-6"><label class="visually-hidden" for="paymentDate">Payment date</label><input class="form-control" id="paymentDate" type="date" name="date" value="<?= htmlspecialchars($paymentForm['date'], ENT_QUOTES, 'UTF-8') ?>"></div>
+            <div class="col-12"><label class="visually-hidden" for="paymentDescription">Description</label><textarea class="form-control" id="paymentDescription" name="description" placeholder="Description"><?= htmlspecialchars($paymentForm['description'], ENT_QUOTES, 'UTF-8') ?></textarea></div>
             <div class="col-12"><button class="btn btn-primary">Add Payment</button></div>
           </form>
         </div>
-      </div>
+      </div><?php endif; ?>
       <div class="mt-3">
         <div class="card p-3">
           <h6 class="mb-3">Send Reminder SMS</h6>

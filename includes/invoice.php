@@ -132,6 +132,7 @@ function invoice_update(mysqli $conn, int $invoiceId, array $invoice, array $cal
     $existing = $find->get_result()->fetch_assoc();
     $find->close();
     if (!$existing) throw new InvalidArgumentException('Invoice not found.');
+    if ($existing['cancelled_at'] !== null) throw new InvalidArgumentException('Cancelled invoices cannot be edited.');
 
     $payment = $conn->prepare("SELECT COALESCE(SUM(amount),0) AS paid FROM transactions WHERE invoice_id=? AND type='payment'");
     $payment->bind_param('i', $invoiceId);
@@ -226,12 +227,13 @@ function invoice_update_payment(mysqli $conn, int $transactionId, string $amount
     if (!$linked) throw new InvalidArgumentException('Linked invoice payment not found.');
     $invoiceId = (int)$linked['invoice_id'];
 
-    $invoice = $conn->prepare('SELECT total, status FROM invoices WHERE id=? FOR UPDATE');
+    $invoice = $conn->prepare('SELECT total, status, cancelled_at FROM invoices WHERE id=? FOR UPDATE');
     $invoice->bind_param('i', $invoiceId);
     $invoice->execute();
     $invoiceRow = $invoice->get_result()->fetch_assoc();
     $invoice->close();
     if (!$invoiceRow) throw new InvalidArgumentException('Invoice not found.');
+    if ($invoiceRow['cancelled_at'] !== null) throw new InvalidArgumentException('Payments on cancelled invoices are preserved and cannot be edited.');
 
     $payment = $conn->prepare("SELECT id, client_id, amount, date, payment_method, description FROM transactions WHERE id=? AND invoice_id=? AND type='payment' FOR UPDATE");
     $payment->bind_param('ii', $transactionId, $invoiceId);

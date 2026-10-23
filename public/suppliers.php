@@ -95,14 +95,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   }
 }
 
-$search = (string)($_GET['search'] ?? '');
+$search = is_string($_GET['search'] ?? null) ? mb_substr(trim($_GET['search']), 0, 120) : '';
 $page = max(1, (int)($_GET['page'] ?? 1));
 $limit = 50;
-$offset = ($page - 1) * $limit;
-
-$suppliers = supplier_list($conn, $search, $limit, $offset);
 $total_suppliers = supplier_count($conn, $search);
-$total_pages = ceil($total_suppliers / $limit);
+$total_pages = max(1, (int)ceil($total_suppliers / $limit));
+$page = min($page, $total_pages);
+$offset = ($page - 1) * $limit;
+$suppliers = supplier_list($conn, $search, $limit, $offset);
 
 $userName = htmlspecialchars($_SESSION['full_name']);
 $role = $_SESSION['role'] ?? 'staff';
@@ -189,14 +189,15 @@ $role = $_SESSION['role'] ?? 'staff';
             </form>
           </div>
           <div class="table-responsive">
-            <table class="table table-borderless table-sm table-striped table-hover table-brand datatable">
+            <table class="table table-borderless table-sm table-striped table-hover table-brand">
               <thead>
                 <tr class="text-muted small">
                   <th>Business Name</th>
                   <th>Contact Person</th>
                   <th>Phone</th>
                   <th>Email</th>
-                  <th>Purchases</th>
+                  <th title="Posted expense transactions linked to this supplier">Total Amount Spent</th>
+                  <th>Bill Purchases</th>
                   <th>Paid</th>
                   <th>Balance</th>
                   <th>Status</th>
@@ -205,20 +206,18 @@ $role = $_SESSION['role'] ?? 'staff';
               </thead>
               <tbody>
                 <?php if (empty($suppliers)): ?>
-                  <tr><td colspan="9" class="text-center text-muted">No suppliers found</td></tr>
+                  <tr><td colspan="10" class="text-center text-muted">No suppliers found</td></tr>
                 <?php else: ?>
                   <?php foreach($suppliers as $supplier): ?>
-                    <?php 
-                      $summary = supplier_get_summary($conn, (int)$supplier['id']);
-                    ?>
                     <tr>
                       <td><?= htmlspecialchars($supplier['business_name']) ?></td>
                       <td><?= htmlspecialchars($supplier['contact_person'] ?? '—') ?></td>
                       <td><?= htmlspecialchars($supplier['phone'] ?? '—') ?></td>
                       <td><?= htmlspecialchars($supplier['email'] ?? '—') ?></td>
-                      <td><?= fmtCurrency($summary['total_purchases']) ?></td>
-                      <td><?= fmtCurrency($summary['total_paid']) ?></td>
-                      <td class="<?= $summary['outstanding_balance'] > 0 ? 'text-danger' : '' ?>"><?= fmtCurrency($summary['outstanding_balance']) ?></td>
+                      <td><?= fmtCurrency((float)$supplier['total_spent']) ?></td>
+                      <td><?= fmtCurrency((float)$supplier['total_purchases']) ?></td>
+                      <td><?= fmtCurrency((float)$supplier['total_paid']) ?></td>
+                      <td class="<?= (float)$supplier['outstanding_balance'] > 0 ? 'text-danger' : '' ?>"><?= fmtCurrency((float)$supplier['outstanding_balance']) ?></td>
                       <td>
                         <span class="badge bg-<?= $supplier['status'] === 'active' ? 'success' : 'secondary' ?>">
                           <?= htmlspecialchars($supplier['status']) ?>

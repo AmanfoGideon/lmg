@@ -55,25 +55,49 @@ function get_payment_method_summary(mysqli $conn, string $start, string $end, bo
 
 $message = '';
 $reportError = '';
-$group = $_GET['group'] ?? 'daily';
-$start = $_GET['start'] ?? date('Y-m-01');
-$end = $_GET['end'] ?? date('Y-m-t');
+$defaultStart = date('Y-m-01');
+$defaultEnd = date('Y-m-t');
+$validReportDate = static function ($value): bool {
+  if (!is_string($value) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) return false;
+  $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+  return $date !== false && $date->format('Y-m-d') === $value;
+};
+$group = is_string($_GET['group'] ?? null) ? $_GET['group'] : 'daily';
+$requestedStart = $_GET['start'] ?? $defaultStart;
+$requestedEnd = $_GET['end'] ?? $defaultEnd;
+$start = $validReportDate($requestedStart) ? $requestedStart : $defaultStart;
+$end = $validReportDate($requestedEnd) ? $requestedEnd : $defaultEnd;
+$reportFiltersInvalid = !$validReportDate($requestedStart) || !$validReportDate($requestedEnd) || $start > $end;
+if ($reportFiltersInvalid) $reportError = 'Choose a valid date range with the start date on or before the end date.';
 $allowedGroups = ['daily','weekly','monthly'];
-if (!in_array($group, $allowedGroups)) $group = 'daily';
+if (!in_array($group, $allowedGroups, true)) $group = 'daily';
 $hasBranch = $conn->query("SHOW COLUMNS FROM transactions LIKE 'branch'")->num_rows > 0;
-$branch = $hasBranch ? ($_GET['branch'] ?? '') : '';
+$branch = $hasBranch && is_string($_GET['branch'] ?? '') ? $_GET['branch'] : '';
 $branches = [];
 if ($hasBranch) {
   $resB = $conn->query("SELECT DISTINCT branch FROM transactions WHERE branch IS NOT NULL AND branch<>'' ORDER BY branch ASC");
   while ($b = $resB->fetch_assoc()) { $branches[] = $b['branch']; }
+  if ($branch !== '' && !in_array($branch, $branches, true)) $branch = '';
 }
 
 if (isset($_POST['action']) && $_POST['action']==='export_csv') {
-  $group = $_POST['group'] ?? 'daily';
-  $start = $_POST['start'] ?? date('Y-m-01');
-  $end = $_POST['end'] ?? date('Y-m-t');
-  $branch = $hasBranch ? trim((string)($_POST['branch'] ?? $branch)) : '';
-  if (!in_array($group, $allowedGroups)) $group = 'daily';
+  if (!csrf_verify()) {
+    http_response_code(403);
+    exit('Invalid request token. Refresh the report and try again.');
+  }
+  $group = is_string($_POST['group'] ?? null) ? $_POST['group'] : 'daily';
+  $postedStart = $_POST['start'] ?? $defaultStart;
+  $postedEnd = $_POST['end'] ?? $defaultEnd;
+  if (!$validReportDate($postedStart) || !$validReportDate($postedEnd) || $postedStart > $postedEnd) {
+    http_response_code(422);
+    exit('Choose a valid report date range.');
+  }
+  $start = $postedStart;
+  $end = $postedEnd;
+  $postedBranch = $_POST['branch'] ?? $branch;
+  $branch = $hasBranch && is_string($postedBranch) ? trim($postedBranch) : '';
+  if ($hasBranch && $branch !== '' && !in_array($branch, $branches, true)) $branch = '';
+  if (!in_array($group, $allowedGroups, true)) $group = 'daily';
   $rows = get_report_rows($conn, $group, $start, $end, $hasBranch, $branch);
   $paymentMethods = get_payment_method_summary($conn, $start, $end, $hasBranch, $branch);
   audit_event($conn, [
@@ -103,6 +127,7 @@ if (isset($_POST['action']) && $_POST['action']==='export_csv') {
 $rows = [];
 $paymentMethods = ['rows'=>[], 'income_total'=>0, 'expense_total'=>0];
 try {
+  if ($reportFiltersInvalid) throw new InvalidArgumentException($reportError);
   $rows = get_report_rows($conn, $group, $start, $end, $hasBranch, $branch);
   $paymentMethods = get_payment_method_summary($conn, $start, $end, $hasBranch, $branch);
 } catch (Throwable $error) {
@@ -254,6 +279,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       <div class="d-flex justify-content-between align-items-center mb-2">
         <h6 class="mb-0">Summary</h6>
         <form method="POST" class="no-print">
+          <?= csrf_input() ?>
           <input type="hidden" name="action" value="export_csv">
           <input type="hidden" name="group" value="<?= htmlspecialchars($group) ?>">
           <input type="hidden" name="start" value="<?= htmlspecialchars($start) ?>">

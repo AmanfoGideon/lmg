@@ -4,6 +4,7 @@
 // These credentials cannot be exposed to the frontend.
 import {
   createInvoice,
+  cancelInvoice,
   deleteInvoice,
   getInvoiceDetails,
   listClientsForForms,
@@ -48,8 +49,8 @@ function invoiceRow(invoice) {
   });
   const statusCell = document.createElement("td");
   const status = document.createElement("span");
-  status.className = `badge ${invoice.status === "paid" ? "bg-success" : invoice.status === "partial" ? "bg-warning text-dark" : "bg-secondary"}`;
-  status.textContent = invoice.status;
+  status.className = `badge ${invoice.cancelled_at ? "bg-dark" : invoice.status === "paid" ? "bg-success" : invoice.status === "partial" ? "bg-warning text-dark" : "bg-secondary"}`;
+  status.textContent = invoice.cancelled_at ? "cancelled" : invoice.status;
   statusCell.append(status);
   row.append(statusCell);
   const actions = document.createElement("td");
@@ -60,36 +61,64 @@ function invoiceRow(invoice) {
   view.textContent = "View";
   view.addEventListener("click", () => showInvoice(invoice.id));
   actions.append(view);
-  const edit = document.createElement("button");
-  edit.className = "btn btn-sm btn-outline-light";
-  edit.type = "button";
-  edit.textContent = "Edit";
-  edit.title = "Edit invoice";
-  edit.addEventListener("click", () => {
-    startInvoiceEdit(invoice.id);
-  });
-  actions.append(edit);
-  const remove = document.createElement("button");
-  remove.className = "btn btn-sm btn-outline-danger";
-  remove.type = "button";
-  remove.textContent = "Delete";
-  remove.title = "Delete invoice";
-  remove.addEventListener("click", async () => {
-    const clientName = invoice.clients?.full_name || "this client";
-    const statusWarning = invoice.status !== "unpaid" ? ` This ${invoice.status} invoice has recorded payments that will also be deleted.` : "";
-    if (!window.confirm(`Delete invoice ${invoice.invoice_number} for ${clientName}?${statusWarning} This cannot be undone.`)) return;
-    remove.disabled = true;
-    try {
-      await deleteInvoice(invoice.id);
-      document.getElementById("invoiceDetails").classList.add("d-none");
-      showNotice("Invoice deleted.");
-      await loadInvoices();
-    } catch (error) {
-      showNotice(error.message || "Unable to delete invoice.", "danger");
-      remove.disabled = false;
+  if (!invoice.cancelled_at) {
+    const edit = document.createElement("button");
+    edit.className = "btn btn-sm btn-outline-light";
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.title = "Edit invoice";
+    edit.addEventListener("click", () => startInvoiceEdit(invoice.id));
+    actions.append(edit);
+
+    if (invoice.status === "unpaid") {
+      const remove = document.createElement("button");
+      remove.className = "btn btn-sm btn-outline-danger";
+      remove.type = "button";
+      remove.textContent = "Delete";
+      remove.title = "Delete invoice without payment history";
+      remove.addEventListener("click", async () => {
+        const clientName = invoice.clients?.full_name || "this client";
+        if (!window.confirm(`Delete unpaid invoice ${invoice.invoice_number} for ${clientName}? This cannot be undone.`)) return;
+        remove.disabled = true;
+        try {
+          await deleteInvoice(invoice.id);
+          document.getElementById("invoiceDetails").classList.add("d-none");
+          showNotice("Invoice deleted.");
+          await loadInvoices();
+        } catch (error) {
+          showNotice(error.message || "Unable to delete invoice.", "danger");
+          remove.disabled = false;
+        }
+      });
+      actions.append(remove);
     }
-  });
-  actions.append(remove);
+
+    const cancel = document.createElement("button");
+    cancel.className = "btn btn-sm btn-outline-warning";
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.title = "Cancel invoice and preserve its financial history";
+    cancel.addEventListener("click", async () => {
+      const reason = window.prompt(`Why are you cancelling invoice ${invoice.invoice_number}?`);
+      if (reason === null) return;
+      if (!reason.trim() || reason.trim().length > 500) {
+        showNotice("Enter a cancellation reason of up to 500 characters.", "warning");
+        return;
+      }
+      if (!window.confirm(`Cancel invoice ${invoice.invoice_number}? Recorded payments will be preserved.`)) return;
+      cancel.disabled = true;
+      try {
+        await cancelInvoice(invoice.id, reason.trim());
+        showNotice("Invoice cancelled. Its payment history was preserved.");
+        await loadInvoices();
+        await showInvoice(invoice.id);
+      } catch (error) {
+        showNotice(error.message || "Unable to cancel invoice.", "danger");
+        cancel.disabled = false;
+      }
+    });
+    actions.append(cancel);
+  }
   row.append(actions);
   return row;
 }
@@ -330,6 +359,45 @@ async function showInvoice(id) {
 
     const summary = document.createElement("p");
     summary.textContent = `Subtotal ${currency(invoice.subtotal)} · Tax ${currency(invoice.tax)} · Total ${currency(invoice.total)} · ${invoice.status}`;
+    const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
+    const paidCents = payments.reduce((sum, payment) => sum + Math.round(Number(payment.amount || 0) * 100), 0);
+    const totalCents = Math.round(Number(invoice.total || 0) * 100);
+    summary.textContent += ` · Paid ${currency(paidCents / 100)} · Balance due ${currency(Math.max(0, totalCents - paidCents) / 100)}`;
+    const paymentHistory = document.createElement("section");
+    const paymentHeading = document.createElement("h3");
+    paymentHeading.className = "h6 mt-3";
+    paymentHeading.textContent = "Payment history";
+    const paymentTable = document.createElement("table");
+    paymentTable.className = "table table-sm table-brand";
+    const paymentHead = document.createElement("tr");
+    ["Date", "Method", "Amount"].forEach((label) => {
+      const cell = document.createElement("th");
+      cell.textContent = label;
+      paymentHead.append(cell);
+    });
+    paymentTable.append(paymentHead);
+    payments.forEach((payment) => {
+      const row = document.createElement("tr");
+      [payment.date || "", payment.payment_method || "Not specified", currency(payment.amount)].forEach((value) => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.append(cell);
+      });
+      paymentTable.append(row);
+    });
+    if (!payments.length) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 3;
+      cell.textContent = "No payments recorded.";
+      row.append(cell);
+      paymentTable.append(row);
+    }
+    paymentHistory.append(paymentHeading, paymentTable);
+    const cancellationNotice = document.createElement("p");
+    cancellationNotice.className = "alert alert-warning";
+    cancellationNotice.textContent = invoice.cancelled_at ? `Cancelled: ${invoice.cancellation_reason || "No reason provided"}` : "";
+
     const form = document.createElement("form");
     form.className = "row g-2 align-items-end";
     form.innerHTML = `<input type="hidden" name="invoice_id" value="${invoice.id}"><div class="col-md-3"><label class="form-label" for="paymentAmount">Payment amount</label><input class="form-control" id="paymentAmount" name="amount" type="number" min="0.01" step="0.01" required></div><div class="col-md-3"><label class="form-label" for="paymentMethod">Method</label><select class="form-select" id="paymentMethod" name="payment_method"><option value="">Not specified</option><option value="cash">Cash</option><option value="mobile">MoMo</option><option value="card">Card</option></select></div><div class="col-md-3"><label class="form-label" for="paymentDate">Date</label><input class="form-control" id="paymentDate" name="date" type="date" required></div><div class="col-md-3"><button class="btn btn-primary" type="submit">Record Payment</button></div>`;
@@ -403,7 +471,9 @@ async function showInvoice(id) {
     });
     emailColumn.append(emailForm);
     reminders.append(smsColumn, emailColumn);
-    panel.replaceChildren(heading, itemTable, summary, form, reminders);
+    panel.replaceChildren(heading, itemTable, summary, paymentHistory);
+    if (invoice.cancelled_at) panel.append(cancellationNotice);
+    else panel.append(form, reminders);
   } catch (error) {
     panel.textContent = error.message || "Unable to load invoice.";
   }

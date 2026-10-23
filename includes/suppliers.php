@@ -119,7 +119,33 @@ function supplier_list(mysqli $conn, string $search = '', int $limit = 50, int $
         $types = 'ssss';
     }
 
-    $sql = "SELECT * FROM suppliers $where ORDER BY business_name ASC LIMIT ? OFFSET ?";
+    $sql = "SELECT s.*,
+        COALESCE(spending.total_spent, 0) AS total_spent,
+        COALESCE(bills.total_purchases, 0) AS total_purchases,
+        COALESCE(bills.total_paid, 0) AS total_paid,
+        COALESCE(bills.outstanding_balance, 0) AS outstanding_balance,
+        COALESCE(bills.overdue_balance, 0) AS overdue_balance
+      FROM suppliers s
+      LEFT JOIN (
+        SELECT supplier_id, SUM(amount) AS total_spent
+        FROM transactions
+        WHERE type='expense' AND supplier_id IS NOT NULL
+        GROUP BY supplier_id
+      ) spending ON spending.supplier_id=s.id
+      LEFT JOIN (
+        SELECT sb.supplier_id,
+          SUM(CASE WHEN sb.status <> 'cancelled' THEN sb.total ELSE 0 END) AS total_purchases,
+          SUM(CASE WHEN sb.status <> 'cancelled' THEN COALESCE(a.allocated, 0) ELSE 0 END) AS total_paid,
+          SUM(CASE WHEN sb.status IN ('unpaid','partial','overdue') THEN GREATEST(sb.total-COALESCE(a.allocated,0),0) ELSE 0 END) AS outstanding_balance,
+          SUM(CASE WHEN sb.status IN ('unpaid','partial','overdue') AND sb.due_date<CURRENT_DATE THEN GREATEST(sb.total-COALESCE(a.allocated,0),0) ELSE 0 END) AS overdue_balance
+        FROM supplier_bills sb
+        LEFT JOIN (
+          SELECT bill_id, SUM(amount) AS allocated
+          FROM supplier_payment_allocations WHERE reversed_at IS NULL GROUP BY bill_id
+        ) a ON a.bill_id=sb.id
+        GROUP BY sb.supplier_id
+      ) bills ON bills.supplier_id=s.id
+      $where ORDER BY s.business_name ASC LIMIT ? OFFSET ?";
     $params[] = $limit;
     $params[] = $offset;
     $types .= 'ii';

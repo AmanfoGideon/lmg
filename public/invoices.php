@@ -54,7 +54,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $invoiceId = filter_var($_POST['invoice_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
         if (!$invoiceId) throw new InvalidArgumentException('Select a valid invoice.');
         $conn->begin_transaction();
-        $find = $conn->prepare('SELECT i.invoice_number, i.client_id, i.total, i.cancelled_at, COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.invoice_id=i.id AND t.type=\'payment\'),0) AS paid_total FROM invoices i WHERE i.id=? FOR UPDATE');
+        $find = $conn->prepare('SELECT i.invoice_number, i.client_id, i.total, i.cancelled_at, COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.invoice_id=i.id AND t.type=\'payment\'),0) AS paid_total, (SELECT COUNT(*) FROM transactions t WHERE t.invoice_id=i.id) AS linked_transactions FROM invoices i WHERE i.id=? FOR UPDATE');
         $find->bind_param('i', $invoiceId);
         $find->execute();
         $invoice = $find->get_result()->fetch_assoc();
@@ -65,6 +65,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $paidCents = invoice_money_cents((string)$invoice['paid_total']);
         $totalCents = invoice_money_cents((string)$invoice['total']);
         if ($paidCents === null || $totalCents === null) throw new RuntimeException('Invoice payment totals are invalid.');
+        if ($paidCents > 0 || (int)$invoice['linked_transactions'] > 0) {
+          throw new InvalidArgumentException('This invoice has linked financial history and cannot be deleted. Cancel it to preserve the invoice and payment records.');
+        }
         $paymentStatus = $paidCents <= 0 ? 'unpaid' : ($paidCents < $totalCents ? 'partial' : 'paid');
 
         if ($conn->query("SHOW TABLES LIKE 'products'")->num_rows > 0) {
@@ -94,6 +97,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = 'Invoice could not be deleted. Please try again.';
         error_log('Invoice deletion failed: '.$e->getMessage());
       }
+    } elseif ($action === 'cancel') {
+      try {
+        $invoiceId = filter_var($_POST['invoice_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        $reason = trim((string)($_POST['cancellation_reason'] ?? ''));
+        if (!$invoiceId) throw new InvalidArgumentException('Select a valid invoice.');
+        if ($reason === '' || strlen($reason) > 500) throw new InvalidArgumentException('Enter a cancellation reason of up to 500 characters.');
+        $conn->begin_transaction();
+        $find = $conn->prepare('SELECT invoice_number, client_id, total, status, cancelled_at, COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.invoice_id=invoices.id AND t.type=\'payment\'),0) AS paid_total FROM invoices WHERE id=? FOR UPDATE');
+        $find->bind_param('i', $invoiceId);
+        $find->execute();
+        $invoice = $find->get_result()->fetch_assoc();
+        $find->close();
+        if (!$invoice) throw new InvalidArgumentException('Invoice not found.');
+        if ($invoice['cancelled_at'] !== null) throw new InvalidArgumentException('This invoice is already cancelled.');
+        if ($conn->query("SHOW TABLES LIKE 'products'")->num_rows > 0) {
+          $inventory = $conn->prepare('SELECT ii.id FROM invoice_items ii JOIN products p ON LOWER(p.name)=LOWER(ii.item_name) WHERE ii.invoice_id=? LIMIT 1');
+          $inventory->bind_param('i', $invoiceId);
+          $inventory->execute();
+          $hasInventoryLink = (bool)$inventory->get_result()->fetch_row();
+          $inventory->close();
+          if ($hasInventoryLink) throw new InvalidArgumentException('This invoice contains inventory-linked items. Reconcile stock before cancelling it.');
+        }
+        $actorId = (int)($_SESSION['user_id'] ?? 0);
+        $cancel = $conn->prepare('UPDATE invoices SET cancelled_at=UTC_TIMESTAMP(), cancelled_by=?, cancellation_reason=? WHERE id=? AND cancelled_at IS NULL');
+        $cancel->bind_param('isi', $actorId, $reason, $invoiceId);
+        $cancel->execute();
+        if ($cancel->affected_rows !== 1) throw new InvalidArgumentException('This invoice could not be cancelled. Refresh and try again.');
+        $cancel->close();
+        log_action($conn, 'invoice_cancel', (string)$invoice['invoice_number'], [
+          'entity_id'=>(string)$invoiceId,
+          'old_values'=>['cancelled_at'=>null,'status'=>$invoice['status'],'total'=>(string)$invoice['total'],'paid_total'=>(string)$invoice['paid_total']],
+          'new_values'=>['cancelled_at'=>'UTC_TIMESTAMP()','reason'=>$reason,'payment_history_preserved'=>true]
+        ]);
+        $conn->commit();
+        $message = 'Invoice cancelled. Its payment history was preserved.';
+      } catch (InvalidArgumentException $e) {
+        try { $conn->rollback(); } catch (Throwable $ignored) {}
+        $message = $e->getMessage();
+      } catch (Throwable $e) {
+        try { $conn->rollback(); } catch (Throwable $ignored) {}
+        $message = 'Invoice could not be cancelled. Please try again.';
+        error_log('Invoice cancellation failed: '.$e->getMessage());
+      }
     } elseif ($action === 'update_status') {
       $message = 'Invoice status is calculated from recorded payments and cannot be changed manually.';
     }
@@ -101,10 +147,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 $clients = $conn->query("SELECT id, full_name FROM clients ORDER BY full_name ASC");
 $invoiceIsJson = isset($_GET['format']) && $_GET['format'] === 'json';
-$invoiceSearch = trim((string)($_GET['q'] ?? ''));
+$invoiceSearch = is_string($_GET['q'] ?? null) ? mb_substr(trim($_GET['q']), 0, 120) : '';
+$invoiceSortOptions = ['date_desc'=>'i.invoice_date DESC, i.id DESC','date_asc'=>'i.invoice_date ASC, i.id ASC','total_desc'=>'i.total DESC, i.id DESC','total_asc'=>'i.total ASC, i.id ASC','number'=>'i.invoice_number ASC'];
+$invoiceSort = is_string($_GET['sort'] ?? null) && isset($invoiceSortOptions[$_GET['sort']]) ? $_GET['sort'] : 'date_desc';
 $invoicePage = max(1, (int)($_GET['page'] ?? 1));
 $invoicePageSize = 25;
-$invoiceWhere = ' WHERE i.cancelled_at IS NULL';
+$invoiceWhere = ' WHERE 1=1';
 $invoiceSearchParams = [];
 if ($invoiceSearch !== '' && !$invoiceIsJson) {
   $invoiceWhere .= ' AND (i.invoice_number LIKE ? OR c.full_name LIKE ?)';
@@ -135,7 +183,7 @@ $invoiceSql = "SELECT i.id, i.invoice_number, i.invoice_date, i.due_date, i.tota
                           LEFT JOIN transactions t ON t.invoice_id=i.id
                           ".$invoiceWhere."
                           GROUP BY i.id, i.invoice_number, i.invoice_date, i.due_date, i.total, c.full_name
-                          ORDER BY i.invoice_date DESC, i.id DESC LIMIT ? OFFSET ?";
+                          ORDER BY ".$invoiceSortOptions[$invoiceSort]." LIMIT ? OFFSET ?";
 $invoiceStmt = $conn->prepare($invoiceSql);
 $invoiceListParams = $invoiceSearchParams;
 $invoiceListParams[] = $invoiceLimit;
@@ -204,8 +252,9 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
           </div>
           <div class="table-responsive">
             <form method="GET" class="row g-2 mb-3" role="search" aria-label="Search invoices">
-              <div class="col-sm-9"><label class="visually-hidden" for="invoiceSearch">Search invoices</label><input class="form-control form-control-sm" type="search" id="invoiceSearch" name="q" value="<?= htmlspecialchars($invoiceSearch, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search invoice number or client"></div>
-              <div class="col-sm-3"><button class="btn btn-sm btn-outline-light w-100">Search</button></div>
+              <div class="col-sm-7"><label class="visually-hidden" for="invoiceSearch">Search invoices</label><input class="form-control form-control-sm" type="search" id="invoiceSearch" name="q" value="<?= htmlspecialchars($invoiceSearch, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search invoice number or client"></div>
+              <div class="col-sm-3"><label class="visually-hidden" for="invoiceSort">Sort invoices</label><select class="form-select form-select-sm" id="invoiceSort" name="sort"><option value="date_desc" <?= $invoiceSort==='date_desc'?'selected':'' ?>>Newest</option><option value="date_asc" <?= $invoiceSort==='date_asc'?'selected':'' ?>>Oldest</option><option value="total_desc" <?= $invoiceSort==='total_desc'?'selected':'' ?>>Highest total</option><option value="total_asc" <?= $invoiceSort==='total_asc'?'selected':'' ?>>Lowest total</option><option value="number" <?= $invoiceSort==='number'?'selected':'' ?>>Invoice number</option></select></div>
+              <div class="col-sm-2"><button class="btn btn-sm btn-outline-light w-100">Search</button></div>
             </form>
             <table class="table table-borderless table-sm table-striped table-hover table-brand">
               <thead>
@@ -234,11 +283,20 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                   <td class="d-flex gap-2 align-items-center">
                     <a class="btn btn-sm btn-outline-light" href="invoice_view.php?id=<?= (int)$i['id'] ?>">View</a>
                     <a class="btn btn-sm btn-outline-light" href="invoice_edit.php?id=<?= (int)$i['id'] ?>">Edit</a>
-                    <form method="POST" class="d-inline-block invoice-delete-form" data-payment-status="<?= htmlspecialchars($i['status'], ENT_QUOTES, 'UTF-8') ?>" data-invoice-number="<?= htmlspecialchars($i['invoice_number'], ENT_QUOTES, 'UTF-8') ?>" data-client="<?= htmlspecialchars($i['client'], ENT_QUOTES, 'UTF-8') ?>">
+                    <?php if ($i['status'] === 'unpaid'): ?>
+                      <form method="POST" class="d-inline-block invoice-delete-form" data-invoice-number="<?= htmlspecialchars($i['invoice_number'], ENT_QUOTES, 'UTF-8') ?>" data-client="<?= htmlspecialchars($i['client'], ENT_QUOTES, 'UTF-8') ?>">
+                        <?= csrf_input() ?>
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="invoice_id" value="<?= (int)$i['id'] ?>">
+                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete unpaid invoice">Delete</button>
+                      </form>
+                    <?php endif; ?>
+                    <form method="POST" class="d-inline-block invoice-cancel-form" data-invoice-number="<?= htmlspecialchars($i['invoice_number'], ENT_QUOTES, 'UTF-8') ?>">
                       <?= csrf_input() ?>
-                      <input type="hidden" name="action" value="delete">
+                      <input type="hidden" name="action" value="cancel">
                       <input type="hidden" name="invoice_id" value="<?= (int)$i['id'] ?>">
-                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete invoice">Delete</button>
+                      <input type="hidden" name="cancellation_reason" value="">
+                      <button type="submit" class="btn btn-sm btn-outline-warning" title="Cancel invoice and preserve payments">Cancel</button>
                     </form>
                   </td>
                 </tr>
@@ -250,7 +308,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
             <small class="text-muted" role="status">Showing <?= $invoiceTotal ? $invoiceOffset + 1 : 0 ?>–<?= min($invoiceOffset + $invoicePageSize, $invoiceTotal) ?> of <?= $invoiceTotal ?> invoices</small>
             <?php if ($invoiceTotal > $invoicePageSize): ?><nav aria-label="Invoice pages"><ul class="pagination pagination-sm mb-0">
               <?php foreach (['Previous'=>$invoicePage-1,'Next'=>$invoicePage+1] as $label=>$targetPage): if (($label==='Previous' && $invoicePage<=1) || ($label==='Next' && $invoicePage>=$invoicePages)) continue; ?>
-                <li class="page-item"><a class="page-link" href="?<?= htmlspecialchars(http_build_query(array_filter(['q'=>$invoiceSearch,'page'=>$targetPage], fn($value)=>$value!=='')), ENT_QUOTES, 'UTF-8') ?>"><?= $label ?></a></li>
+                <li class="page-item"><a class="page-link" href="?<?= htmlspecialchars(http_build_query(array_filter(['q'=>$invoiceSearch,'sort'=>$invoiceSort,'page'=>$targetPage], fn($value)=>$value!=='')), ENT_QUOTES, 'UTF-8') ?>"><?= $label ?></a></li>
               <?php endforeach; ?>
               <li class="page-item disabled"><span class="page-link">Page <?= $invoicePage ?> of <?= $invoicePages ?></span></li>
             </ul></nav><?php endif; ?>
@@ -268,11 +326,22 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   document.querySelectorAll('.invoice-delete-form').forEach(function(form) {
     form.addEventListener('submit', function(event) {
       const invoiceLabel = `${form.dataset.invoiceNumber} for ${form.dataset.client}`;
-      const status = form.dataset.paymentStatus;
-      if (!window.confirm(`Delete ${status} invoice ${invoiceLabel}? This will also delete linked payments. This cannot be undone.`)) {
+      if (!window.confirm(`Delete unpaid invoice ${invoiceLabel}? This cannot be undone.`)) {
         event.preventDefault();
         return;
       }
+    });
+  });
+  document.querySelectorAll('.invoice-cancel-form').forEach(function(form) {
+    form.addEventListener('submit', function(event) {
+      const reason = window.prompt(`Why are you cancelling invoice ${form.dataset.invoiceNumber}?`);
+      if (reason === null || !reason.trim() || reason.length > 500) {
+        event.preventDefault();
+        if (reason !== null) window.alert('Enter a cancellation reason of up to 500 characters.');
+        return;
+      }
+      form.querySelector('[name="cancellation_reason"]').value = reason.trim();
+      if (!window.confirm(`Cancel invoice ${form.dataset.invoiceNumber}? Its recorded payment history will be preserved.`)) event.preventDefault();
     });
   });
 </script>

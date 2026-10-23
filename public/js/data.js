@@ -205,6 +205,16 @@ export async function deleteInvoice(invoiceId) {
   return unwrap(await getSupabase().rpc("delete_invoice", { p_invoice_id: invoiceId }));
 }
 
+export async function cancelInvoice(invoiceId, reason) {
+  if (!isOnline()) {
+    throw new Error("Invoice cancellation requires an internet connection so the audit record is saved safely.");
+  }
+  return unwrap(await getSupabase().rpc("cancel_invoice", {
+    p_invoice_id: invoiceId,
+    p_reason: reason,
+  }));
+}
+
 export async function updateInvoice(invoice) {
   if (!isOnline()) {
     throw new Error("Invoice editing requires an internet connection.");
@@ -329,7 +339,7 @@ export async function listInvoices() {
 
   return unwrap(await getSupabase()
     .from("invoices")
-    .select("id, invoice_number, client_id, invoice_date, due_date, total, status, clients(full_name)")
+    .select("id, invoice_number, client_id, invoice_date, due_date, total, status, cancelled_at, cancellation_reason, clients(full_name)")
     .order("invoice_date", { ascending: false })
     .order("id", { ascending: false })
     .limit(100));
@@ -345,11 +355,19 @@ export async function getFinancialReport(group, start, end, branch = null) {
 }
 
 export async function getInvoiceDetails(id) {
-  return unwrap(await getSupabase()
+  const invoice = unwrap(await getSupabase()
     .from("invoices")
-    .select("id, invoice_number, client_id, invoice_date, due_date, subtotal, tax, total, notes, status, clients(full_name, phone, email, address), invoice_items(id, item_name, quantity, price, total)")
+    .select("id, invoice_number, client_id, invoice_date, due_date, subtotal, tax, total, notes, status, cancelled_at, cancellation_reason, clients(full_name, phone, email, address), invoice_items(id, item_name, quantity, price, total)")
     .eq("id", id)
     .single());
+  const payments = unwrap(await getSupabase()
+    .from("transactions")
+    .select("id, amount, date, payment_method, description")
+    .eq("invoice_id", id)
+    .eq("type", "payment")
+    .order("date", { ascending: false })
+    .order("id", { ascending: false }));
+  return { ...invoice, payments };
 }
 
 export async function listReportBranches() {

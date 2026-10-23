@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   quantity INT DEFAULT 1,
   price DECIMAL(10,2) NOT NULL,
   total DECIMAL(10,2) NOT NULL,
-  FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
+  FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_invoice_items_invoice ON invoice_items(invoice_id);
@@ -142,7 +142,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payment_method ENUM('cash','mo
 -- Link payments to invoices
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS invoice_id INT NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_invoice ON transactions(invoice_id);
-ALTER TABLE transactions ADD CONSTRAINT IF NOT EXISTS fk_transactions_invoice FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE;
+ALTER TABLE transactions ADD CONSTRAINT IF NOT EXISTS fk_transactions_invoice FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE RESTRICT;
 
 -- =======================================
 -- 9) Client Interactions (CRM notes)

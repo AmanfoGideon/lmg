@@ -17,9 +17,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   $action = $_POST['action'] ?? '';
   if (isset($_POST['request_key'])) $transactionRequestKey = (string)$_POST['request_key'];
   if ($action === 'create') {
+    $type = is_string($_POST['type'] ?? null) ? $_POST['type'] : '';
+    $amountInput = is_string($_POST['amount'] ?? null) ? $_POST['amount'] : '';
+    $amountCents = invoice_money_cents($amountInput);
+    $payment_method = is_string($_POST['payment_method'] ?? null) && $_POST['payment_method'] !== '' ? $_POST['payment_method'] : null;
+    $date = is_string($_POST['date'] ?? null) && $_POST['date'] !== '' ? $_POST['date'] : date('Y-m-d');
+    if (!in_array($type, ['income','expense','invoice','payment'], true) || $amountCents === null || $amountCents <= 0 || $amountCents > INVOICE_MAX_CENTS || !invoice_valid_date($date) || !in_array($payment_method, [null,'cash','mobile','card'], true)) {
+      $message = 'Choose a valid transaction type, positive amount, date, and payment method.';
+    } else {
+    $amount = invoice_cents_decimal($amountCents);
     $client_id = (int)($_POST['client_id'] ?? 0);
-    $client_name = trim($_POST['client_name'] ?? '');
-    $type = $_POST['type'] ?? 'income';
+    $client_name = is_string($_POST['client_name'] ?? null) ? trim($_POST['client_name']) : '';
     $invoice_id = (int)($_POST['invoice_id'] ?? 0);
     if (!($type === 'payment' && $invoice_id > 0) && $client_id <= 0 && $client_name !== '') {
       $find = $conn->prepare("SELECT id FROM clients WHERE full_name=? LIMIT 1");
@@ -44,11 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $ins->close();
       }
     }
-    $amount = (float)($_POST['amount'] ?? 0);
-    $payment_method = $_POST['payment_method'] ?? null;
-    $description = trim($_POST['description'] ?? '');
-    $date = $_POST['date'] ?: date('Y-m-d');
-    if (!in_array($type, ['income','expense','invoice','payment'])) { $type = 'income'; }
+    $description = is_string($_POST['description'] ?? null) ? trim($_POST['description']) : '';
     if ($type === 'payment' && $invoice_id > 0) {
       try {
         $result = invoice_record_payment($conn, $invoice_id, (string)($_POST['amount'] ?? ''), $payment_method, $description, (string)$date, $transactionRequestKey);
@@ -61,7 +65,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         error_log('Invoice payment failed: '.$e->getMessage());
       }
     } elseif ($client_id > 0 || ($type === 'expense' && (int)($_POST['supplier_id'] ?? 0) > 0)) {
-      if ($payment_method && !in_array($payment_method, ['cash','mobile','card'])) { $payment_method = null; }
       $supplier_id = $type === 'expense' && (int)($_POST['supplier_id'] ?? 0) > 0 ? (int)$_POST['supplier_id'] : null;
       if ($supplier_id !== null) {
         $supplierCheck = $conn->prepare("SELECT id FROM suppliers WHERE id=? AND status='active'");
@@ -99,6 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
       $message = 'Specify a client by name';
     }
+    }
     } elseif ($action === 'create_supplier') {
       try {
         $supplier = [
@@ -135,6 +139,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $q->bind_result($foundId, $foundClientId, $foundType, $foundAmount, $foundDate, $foundMethod, $foundDescription, $foundInv);
         if ($q->fetch()) {
           $q->close();
+          if ($foundType === 'payment' && $foundInv !== null) {
+            $message = 'Invoice payments are preserved and cannot be deleted from the transaction list. Correct the payment or cancel the invoice with a reason.';
+          } else {
           $conn->begin_transaction();
           $del = $conn->prepare("DELETE FROM transactions WHERE id=?");
           $del->bind_param('i', $txId);
@@ -162,6 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message = 'Error deleting transaction';
           }
           $del->close();
+          }
         } else {
           $q->close();
           $message = 'Transaction not found';
@@ -176,15 +184,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $oldResult = $oldStmt->get_result();
         $oldTx = $oldResult->fetch_assoc() ?: null;
         $oldStmt->close();
-        $conn->begin_transaction();
-        $amount = (float)($_POST['amount'] ?? 0);
-        $type = $_POST['type'] ?? 'income';
-        $payment_method = $_POST['payment_method'] ?? null;
-        $description = trim($_POST['description'] ?? '');
-        $date = $_POST['date'] ?: date('Y-m-d');
+        $amountValue = (string)($_POST['amount'] ?? '');
+        $amountCents = invoice_money_cents($amountValue);
+        $amount = $amountCents !== null ? invoice_cents_decimal($amountCents) : '0.00';
+        $type = is_string($_POST['type'] ?? null) ? $_POST['type'] : '';
+        $payment_method = is_string($_POST['payment_method'] ?? null) && $_POST['payment_method'] !== '' ? $_POST['payment_method'] : null;
+        $description = is_string($_POST['description'] ?? null) ? trim($_POST['description']) : '';
+        $date = is_string($_POST['date'] ?? null) && $_POST['date'] !== '' ? $_POST['date'] : date('Y-m-d');
         $invoice_id = (int)($_POST['invoice_id'] ?? 0);
         $supplier_id = $type === 'expense' && (int)($_POST['supplier_id'] ?? 0) > 0 ? (int)$_POST['supplier_id'] : null;
-        if (!in_array($type, ['income','expense','invoice','payment'])) { $type = 'income'; }
+        if (!in_array($type, ['income','expense','invoice','payment'], true)) { $type = ''; }
+        if ($oldTx && $oldTx['type'] === 'payment' && !empty($oldTx['invoice_id'])) {
+          if ($type !== 'payment' || $invoice_id !== (int)$oldTx['invoice_id']) {
+            $message = 'An invoice payment must remain linked to its original invoice. Correct its amount or details instead.';
+          } else {
+            try {
+              invoice_update_payment($conn, $txId, $amountValue, $payment_method !== '' ? $payment_method : null, $description, (string)$date);
+              $message = 'Invoice payment corrected';
+            } catch (InvalidArgumentException $e) {
+              $message = $e->getMessage();
+            } catch (Throwable $e) {
+              $message = 'Invoice payment could not be corrected. Please try again.';
+              error_log('Invoice payment correction failed: '.$e->getMessage());
+            }
+          }
+        } elseif ($type === 'payment' && $invoice_id > 0) {
+          $message = 'Record invoice payments from the invoice page so the balance and payment history stay synchronized.';
+        } elseif (!in_array($type, ['income','expense','invoice','payment'], true) || $amountCents === null || $amountCents <= 0 || $amountCents > INVOICE_MAX_CENTS || !invoice_valid_date((string)$date) || !in_array($payment_method, [null,'cash','mobile','card'], true)) {
+          $message = 'Choose a valid transaction type, positive amount, date, and payment method.';
+        } else {
+        try {
+        $conn->begin_transaction();
         if ($type === 'expense' && $supplier_id !== null) {
           $supplierCheck = $conn->prepare("SELECT id FROM suppliers WHERE id=? AND (status='active' OR id=?)");
           $supplierCheck->bind_param('ii', $supplier_id, $supplier_id);
@@ -234,6 +264,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           $message = 'Error updating transaction';
         }
         $upd->close();
+        } catch (InvalidArgumentException $e) {
+          try { $conn->rollback(); } catch (Throwable $ignored) {}
+          $message = $e->getMessage();
+        } catch (Throwable $e) {
+          try { $conn->rollback(); } catch (Throwable $ignored) {}
+          $message = 'Transaction could not be updated. Please try again.';
+          error_log('Transaction update failed: '.$e->getMessage());
+        }
+        }
       }
   }
   }
@@ -250,8 +289,10 @@ $allSuppliersResult = $conn->query("SELECT id, business_name, contact_person, ph
 $allSuppliersArr = [];
 while ($sRow = $allSuppliersResult->fetch_assoc()) { $allSuppliersArr[] = $sRow; }
 $txIsJson = isset($_GET['format']) && $_GET['format'] === 'json';
-$txSearch = trim((string)($_GET['q'] ?? ''));
+$txSearch = is_string($_GET['q'] ?? null) ? mb_substr(trim($_GET['q']), 0, 120) : '';
 $txType = in_array($_GET['type'] ?? '', ['income','expense','invoice','payment'], true) ? (string)$_GET['type'] : '';
+$txSortOptions = ['date_desc'=>'t.date DESC, t.id DESC','date_asc'=>'t.date ASC, t.id ASC','amount_desc'=>'t.amount DESC, t.id DESC','amount_asc'=>'t.amount ASC, t.id ASC','type'=>'t.type ASC, t.date DESC, t.id DESC'];
+$txSort = is_string($_GET['sort'] ?? null) && isset($txSortOptions[$_GET['sort']]) ? $_GET['sort'] : 'date_desc';
 $txPage = max(1, (int)($_GET['page'] ?? 1));
 $txPageSize = 25;
 $txWhere = [];
@@ -294,7 +335,7 @@ $txSql = "SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description
                     LEFT JOIN clients c ON c.id=t.client_id
                     LEFT JOIN invoices i ON i.id=t.invoice_id
                     LEFT JOIN suppliers s ON s.id=t.supplier_id
-                    ".$txWhereSql." ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?";
+                    ".$txWhereSql." ORDER BY ".$txSortOptions[$txSort]." LIMIT ? OFFSET ?";
 $txStmt = $conn->prepare($txSql);
 $txListTypes = $txTypes.'ii';
 $txListParams = $txParams;
@@ -432,8 +473,9 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
           <div class="table-responsive">
             <form method="GET" class="row g-2 mb-3" role="search" aria-label="Search transactions">
               <div class="col-sm-7"><label class="visually-hidden" for="transactionSearch">Search transactions</label><input class="form-control form-control-sm" type="search" id="transactionSearch" name="q" value="<?= htmlspecialchars($txSearch, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search client, supplier, invoice, description or ID"></div>
-              <div class="col-sm-3"><label class="visually-hidden" for="transactionTypeFilter">Transaction type</label><select class="form-select form-select-sm" id="transactionTypeFilter" name="type"><option value="">All types</option><?php foreach (['income'=>'Income','expense'=>'Expense','invoice'=>'Invoice','payment'=>'Payment'] as $value=>$label): ?><option value="<?= $value ?>" <?= $txType===$value?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
-              <div class="col-sm-2"><button class="btn btn-sm btn-outline-light w-100">Search</button></div>
+              <div class="col-sm-2"><label class="visually-hidden" for="transactionTypeFilter">Transaction type</label><select class="form-select form-select-sm" id="transactionTypeFilter" name="type"><option value="">All types</option><?php foreach (['income'=>'Income','expense'=>'Expense','invoice'=>'Invoice','payment'=>'Payment'] as $value=>$label): ?><option value="<?= $value ?>" <?= $txType===$value?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
+              <div class="col-sm-2"><label class="visually-hidden" for="transactionSort">Sort transactions</label><select class="form-select form-select-sm" id="transactionSort" name="sort"><option value="date_desc" <?= $txSort==='date_desc'?'selected':'' ?>>Newest</option><option value="date_asc" <?= $txSort==='date_asc'?'selected':'' ?>>Oldest</option><option value="amount_desc" <?= $txSort==='amount_desc'?'selected':'' ?>>Highest amount</option><option value="amount_asc" <?= $txSort==='amount_asc'?'selected':'' ?>>Lowest amount</option><option value="type" <?= $txSort==='type'?'selected':'' ?>>Type</option></select></div>
+              <div class="col-sm-1"><button class="btn btn-sm btn-outline-light w-100">Go</button></div>
             </form>
             <table id="transactionsTable" class="table table-borderless table-sm table-striped table-hover table-brand">
               <thead>
@@ -501,7 +543,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
             <small class="text-muted" role="status">Showing <?= $txTotal ? $txOffset + 1 : 0 ?>–<?= min($txOffset + $txPageSize, $txTotal) ?> of <?= $txTotal ?> transactions</small>
             <?php if ($txTotal > $txPageSize): ?><nav aria-label="Transaction pages"><ul class="pagination pagination-sm mb-0">
               <?php foreach (['Previous'=>$txPage-1,'Next'=>$txPage+1] as $label=>$targetPage): if (($label==='Previous' && $txPage<=1) || ($label==='Next' && $txPage>=$txPages)) continue; ?>
-                <li class="page-item"><a class="page-link" href="?<?= htmlspecialchars(http_build_query(array_filter(['q'=>$txSearch,'type'=>$txType,'page'=>$targetPage], fn($value)=>$value!=='')), ENT_QUOTES, 'UTF-8') ?>"><?= $label ?></a></li>
+                <li class="page-item"><a class="page-link" href="?<?= htmlspecialchars(http_build_query(array_filter(['q'=>$txSearch,'type'=>$txType,'sort'=>$txSort,'page'=>$targetPage], fn($value)=>$value!=='')), ENT_QUOTES, 'UTF-8') ?>"><?= $label ?></a></li>
               <?php endforeach; ?>
               <li class="page-item disabled"><span class="page-link">Page <?= $txPage ?> of <?= $txPages ?></span></li>
             </ul></nav><?php endif; ?>
