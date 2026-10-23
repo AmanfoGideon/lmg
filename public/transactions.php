@@ -291,19 +291,48 @@ while ($sRow = $allSuppliersResult->fetch_assoc()) { $allSuppliersArr[] = $sRow;
 $txIsJson = isset($_GET['format']) && $_GET['format'] === 'json';
 $txSearch = is_string($_GET['q'] ?? null) ? mb_substr(trim($_GET['q']), 0, 120) : '';
 $txType = in_array($_GET['type'] ?? '', ['income','expense','invoice','payment'], true) ? (string)$_GET['type'] : '';
-$txSortOptions = ['date_desc'=>'t.date DESC, t.id DESC','date_asc'=>'t.date ASC, t.id ASC','amount_desc'=>'t.amount DESC, t.id DESC','amount_asc'=>'t.amount ASC, t.id ASC','type'=>'t.type ASC, t.date DESC, t.id DESC'];
+$txSortOptions = ['date_desc'=>'t.date DESC, t.id DESC','date_asc'=>'t.date ASC, t.id ASC','amount_desc'=>'t.amount DESC, t.id DESC','amount_asc'=>'t.amount ASC, t.id ASC','type'=>'t.type ASC, t.date DESC, t.id DESC','client'=>'c.full_name ASC, t.date DESC, t.id DESC','supplier'=>'s.business_name ASC, t.date DESC, t.id DESC'];
 $txSort = is_string($_GET['sort'] ?? null) && isset($txSortOptions[$_GET['sort']]) ? $_GET['sort'] : 'date_desc';
 $txPage = max(1, (int)($_GET['page'] ?? 1));
-$txPageSize = 25;
+$txPageSize = in_array((int)($_GET['page_size'] ?? 25), [10,25,50,100], true) ? (int)($_GET['page_size'] ?? 25) : 25;
+$txStart = is_string($_GET['start'] ?? null) ? $_GET['start'] : '';
+$txEnd = is_string($_GET['end'] ?? null) ? $_GET['end'] : '';
+$txMinAmount = is_string($_GET['min_amount'] ?? null) ? trim($_GET['min_amount']) : '';
+$txMaxAmount = is_string($_GET['max_amount'] ?? null) ? trim($_GET['max_amount']) : '';
+$txMethod = in_array($_GET['method'] ?? '', ['cash','mobile','card',''], true) ? (string)($_GET['method'] ?? '') : '';
+$txSupplier = filter_var($_GET['supplier'] ?? null, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]) ?: 0;
+$txClient = filter_var($_GET['client'] ?? null, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]) ?: 0;
+$txNoSupplier = ($_GET['no_supplier'] ?? '') === '1';
+$txNoClient = ($_GET['no_client'] ?? '') === '1';
+$txFilterError = '';
+$validDate = static function ($value): bool {
+  if ($value === '') return true;
+  if (!is_string($value) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) return false;
+  $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+  return $date !== false && $date->format('Y-m-d') === $value;
+};
+$validAmount = static function ($value): bool { return $value === '' || (is_string($value) && preg_match('/^\d{1,10}(\.\d{1,2})?$/', $value)); };
+if (!$validDate($txStart) || !$validDate($txEnd) || ($txStart !== '' && $txEnd !== '' && $txStart > $txEnd)) $txFilterError = 'Choose a valid date range.';
+if (!$validAmount($txMinAmount) || !$validAmount($txMaxAmount)) $txFilterError = 'Enter valid minimum and maximum amounts.';
+if ($txMinAmount !== '' && $txMaxAmount !== '' && (float)$txMinAmount > (float)$txMaxAmount) $txFilterError = 'Minimum amount cannot exceed maximum amount.';
 $txWhere = [];
 $txParams = [];
 $txTypes = '';
 if ($txSearch !== '' && !$txIsJson) {
-  $txWhere[] = "(CAST(t.id AS CHAR) LIKE ? OR c.full_name LIKE ? OR s.business_name LIKE ? OR i.invoice_number LIKE ? OR t.description LIKE ?)";
+  $txWhere[] = "(CAST(t.id AS CHAR) LIKE ? OR c.full_name LIKE ? OR s.business_name LIKE ? OR i.invoice_number LIKE ? OR t.description LIKE ? OR t.payment_method LIKE ?)";
   $searchLike = '%'.$txSearch.'%';
-  array_push($txParams, $searchLike, $searchLike, $searchLike, $searchLike, $searchLike);
-  $txTypes .= 'sssss';
+  $paymentSearchLike = stripos($txSearch, 'momo') !== false ? '%mobile%' : $searchLike;
+  array_push($txParams, $searchLike, $searchLike, $searchLike, $searchLike, $searchLike, $paymentSearchLike);
+  $txTypes .= 'ssssss';
 }
+if ($txFilterError === '') {
+  foreach ([['t.date >= ?', $txStart, 's'], ['t.date <= ?', $txEnd, 's'], ['t.amount >= ?', $txMinAmount, 'd'], ['t.amount <= ?', $txMaxAmount, 'd'], ['t.payment_method = ?', $txMethod, 's'], ['t.supplier_id = ?', $txSupplier, 'i'], ['t.client_id = ?', $txClient, 'i']] as [$clause, $value, $bindType]) {
+    if ($value !== '' && $value !== 0) { $txWhere[] = $clause; $txParams[] = $value; $txTypes .= $bindType; }
+  }
+  if ($txNoSupplier) $txWhere[] = 't.supplier_id IS NULL';
+  if ($txNoClient) $txWhere[] = 't.client_id IS NULL';
+}
+if ($txFilterError !== '') $txWhere[] = '1=0';
 if ($txType !== '' && !$txIsJson) {
   $txWhere[] = 't.type=?';
   $txParams[] = $txType;
@@ -318,6 +347,7 @@ if ($txEditId > 0 && !$txIsJson) {
 $txWhereSql = $txWhere ? ' WHERE '.implode(' AND ', $txWhere) : '';
 $txTotal = 0;
 $txOffset = 0;
+$txSummary = ['count'=>0,'income'=>0.0,'expense'=>0.0];
 if (!$txIsJson) {
   $countTx = $conn->prepare("SELECT COUNT(*) FROM transactions t LEFT JOIN clients c ON c.id=t.client_id LEFT JOIN invoices i ON i.id=t.invoice_id LEFT JOIN suppliers s ON s.id=t.supplier_id".$txWhereSql);
   if ($txTypes !== '') $countTx->bind_param($txTypes, ...$txParams);
@@ -325,10 +355,46 @@ if (!$txIsJson) {
   $countTx->bind_result($txTotal);
   $countTx->fetch();
   $countTx->close();
+  if ($txFilterError === '') {
+    $summaryTx = $conn->prepare("SELECT COUNT(*), COALESCE(SUM(CASE WHEN t.type IN ('income','payment') THEN t.amount ELSE 0 END),0), COALESCE(SUM(CASE WHEN t.type='expense' THEN t.amount ELSE 0 END),0) FROM transactions t LEFT JOIN clients c ON c.id=t.client_id LEFT JOIN invoices i ON i.id=t.invoice_id LEFT JOIN suppliers s ON s.id=t.supplier_id".$txWhereSql);
+    if ($txTypes !== '') $summaryTx->bind_param($txTypes, ...$txParams);
+    $summaryTx->execute();
+    $summaryCount = 0; $summaryIncome = 0.0; $summaryExpense = 0.0;
+    $summaryTx->bind_result($summaryCount, $summaryIncome, $summaryExpense);
+    $summaryTx->fetch();
+    $txSummary = ['count'=>$summaryCount,'income'=>$summaryIncome,'expense'=>$summaryExpense];
+    $summaryTx->close();
+  }
   $txTotal = (int)$txTotal;
   $txPages = max(1, (int)ceil($txTotal / $txPageSize));
   $txPage = min($txPage, $txPages);
   $txOffset = ($txPage - 1) * $txPageSize;
+}
+$txTotal = $txFilterError !== '' ? 0 : (int)$txTotal;
+$txSummary['count'] = (int)$txSummary['count'];
+$txSummary['income'] = (float)$txSummary['income'];
+$txSummary['expense'] = (float)$txSummary['expense'];
+$txQueryParams = array_filter([
+  'q'=>$txSearch, 'type'=>$txType, 'sort'=>$txSort, 'page_size'=>$txPageSize,
+  'start'=>$txStart, 'end'=>$txEnd, 'min_amount'=>$txMinAmount, 'max_amount'=>$txMaxAmount,
+  'method'=>$txMethod, 'supplier'=>$txSupplier ?: '', 'client'=>$txClient ?: '',
+  'no_supplier'=>$txNoSupplier ? '1' : '', 'no_client'=>$txNoClient ? '1' : '',
+], static fn($value) => $value !== '' && $value !== 0);
+if (!$txIsJson && ($_GET['export'] ?? '') === 'csv') {
+  if ($txFilterError !== '') { http_response_code(422); exit($txFilterError); }
+  $exportSql = "SELECT t.id, t.date, t.type, t.description, c.full_name AS client, s.business_name AS supplier, i.invoice_number, t.payment_method, t.amount FROM transactions t LEFT JOIN clients c ON c.id=t.client_id LEFT JOIN invoices i ON i.id=t.invoice_id LEFT JOIN suppliers s ON s.id=t.supplier_id".$txWhereSql." ORDER BY ".$txSortOptions[$txSort];
+  $exportStmt = $conn->prepare($exportSql);
+  if ($txTypes !== '') $exportStmt->bind_param($txTypes, ...$txParams);
+  $exportStmt->execute();
+  $exportRows = $exportStmt->get_result();
+  header('Content-Type: text/csv; charset=utf-8');
+  header('Content-Disposition: attachment; filename="transactions_'.date('Ymd').'.csv"');
+  $out = fopen('php://output', 'w');
+  fputcsv($out, ['ID','Date','Type','Description','Client','Supplier','Invoice','Payment Method','Amount']);
+  while ($row = $exportRows->fetch_assoc()) fputcsv($out, [$row['id'],$row['date'],$row['type'],$row['description'],$row['client'],$row['supplier'],$row['invoice_number'],payment_method_label($row['payment_method'] ?? null),number_format((float)$row['amount'],2,'.','')]);
+  fclose($out);
+  $exportStmt->close();
+  exit;
 }
 $txSql = "SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, t.invoice_id, t.supplier_id, c.full_name AS client, i.invoice_number, s.business_name AS supplier_name
                     FROM transactions t
@@ -400,6 +466,13 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       <div class="alert alert-info py-2" role="alert" aria-live="polite"><?= htmlspecialchars($message) ?></div>
     <?php endif; ?>
 
+    <div class="row g-2 mb-3" aria-label="Filtered transaction totals">
+      <div class="col-6 col-xl-3"><div class="card p-3 h-100"><div class="text-muted small">Matching transactions</div><div class="h5 mb-0"><?= number_format($txSummary['count']) ?></div><small class="text-muted">All filtered results</small></div></div>
+      <div class="col-6 col-xl-3"><div class="card p-3 h-100"><div class="text-muted small">Income</div><div class="h5 mb-0"><?= fmtCurrency($txSummary['income']) ?></div><small class="text-muted">Income and received payments</small></div></div>
+      <div class="col-6 col-xl-3"><div class="card p-3 h-100"><div class="text-muted small">Expenses</div><div class="h5 mb-0"><?= fmtCurrency($txSummary['expense']) ?></div><small class="text-muted">Matching expense records</small></div></div>
+      <div class="col-6 col-xl-3"><div class="card p-3 h-100"><div class="text-muted small">Net Movement</div><div class="h5 mb-0"><?= fmtCurrency($txSummary['income'] - $txSummary['expense']) ?></div><small class="text-muted">Income minus expenses</small></div></div>
+    </div>
+
     <div class="row g-3">
       <div class="col-lg-4">
         <div id="addTx" class="card p-3">
@@ -469,14 +542,26 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       </div>
       <div class="col-lg-8">
         <div id="listTx" class="card p-3">
-          <h6 class="mb-3">Recent Transactions</h6>
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h2 class="h6 mb-1">Transactions</h2><p class="small text-muted mb-0">Search and filter posted financial activity.</p></div><div class="d-flex gap-2"><a class="btn btn-sm btn-outline-light" href="<?= htmlspecialchars('transactions.php?'.http_build_query($txQueryParams + ['export'=>'csv']), ENT_QUOTES, 'UTF-8') ?>"><i class="bi bi-download"></i> Export CSV</a><a class="btn btn-sm btn-primary" href="#addTx"><i class="bi bi-plus-lg"></i> New Transaction</a><a class="btn btn-sm btn-outline-light" href="<?= htmlspecialchars('transactions.php?'.http_build_query($txQueryParams), ENT_QUOTES, 'UTF-8') ?>" aria-label="Refresh transaction results" title="Refresh"><i class="bi bi-arrow-clockwise"></i></a></div></div>
           <div class="table-responsive">
-            <form method="GET" class="row g-2 mb-3" role="search" aria-label="Search transactions">
-              <div class="col-sm-7"><label class="visually-hidden" for="transactionSearch">Search transactions</label><input class="form-control form-control-sm" type="search" id="transactionSearch" name="q" value="<?= htmlspecialchars($txSearch, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search client, supplier, invoice, description or ID"></div>
-              <div class="col-sm-2"><label class="visually-hidden" for="transactionTypeFilter">Transaction type</label><select class="form-select form-select-sm" id="transactionTypeFilter" name="type"><option value="">All types</option><?php foreach (['income'=>'Income','expense'=>'Expense','invoice'=>'Invoice','payment'=>'Payment'] as $value=>$label): ?><option value="<?= $value ?>" <?= $txType===$value?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
-              <div class="col-sm-2"><label class="visually-hidden" for="transactionSort">Sort transactions</label><select class="form-select form-select-sm" id="transactionSort" name="sort"><option value="date_desc" <?= $txSort==='date_desc'?'selected':'' ?>>Newest</option><option value="date_asc" <?= $txSort==='date_asc'?'selected':'' ?>>Oldest</option><option value="amount_desc" <?= $txSort==='amount_desc'?'selected':'' ?>>Highest amount</option><option value="amount_asc" <?= $txSort==='amount_asc'?'selected':'' ?>>Lowest amount</option><option value="type" <?= $txSort==='type'?'selected':'' ?>>Type</option></select></div>
-              <div class="col-sm-1"><button class="btn btn-sm btn-outline-light w-100">Go</button></div>
+            <form method="GET" class="row g-2 mb-3" role="search" aria-label="Filter transactions">
+              <div class="col-md-7"><label class="visually-hidden" for="transactionSearch">Search transactions</label><div class="input-group input-group-sm"><input class="form-control" type="search" id="transactionSearch" name="q" value="<?= htmlspecialchars($txSearch, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search ID, client, supplier, invoice, method or description"><?php if ($txSearch !== ''): ?><a class="btn btn-outline-light" href="<?= htmlspecialchars('transactions.php?'.http_build_query(array_diff_key($txQueryParams, ['q'=>true])), ENT_QUOTES, 'UTF-8') ?>" aria-label="Clear search">Clear</a><?php endif; ?></div></div>
+              <div class="col-md-3"><label class="visually-hidden" for="transactionTypeFilter">Transaction type</label><select class="form-select form-select-sm" id="transactionTypeFilter" name="type"><option value="">All types</option><?php foreach (['income'=>'Income','expense'=>'Expense','invoice'=>'Invoice','payment'=>'Payment'] as $value=>$label): ?><option value="<?= $value ?>" <?= $txType===$value?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
+              <div class="col-md-2"><label class="visually-hidden" for="transactionSort">Sort transactions</label><select class="form-select form-select-sm" id="transactionSort" name="sort"><option value="date_desc" <?= $txSort==='date_desc'?'selected':'' ?>>Newest</option><option value="date_asc" <?= $txSort==='date_asc'?'selected':'' ?>>Oldest</option><option value="amount_desc" <?= $txSort==='amount_desc'?'selected':'' ?>>Highest amount</option><option value="amount_asc" <?= $txSort==='amount_asc'?'selected':'' ?>>Lowest amount</option><option value="type" <?= $txSort==='type'?'selected':'' ?>>Type</option><option value="client" <?= $txSort==='client'?'selected':'' ?>>Client</option><option value="supplier" <?= $txSort==='supplier'?'selected':'' ?>>Supplier</option></select></div>
+              <div class="col-12"><details <?= ($txStart || $txEnd || $txMinAmount !== '' || $txMaxAmount !== '' || $txMethod !== '' || $txSupplier || $txClient || $txNoSupplier || $txNoClient) ? 'open' : '' ?>><summary class="small fw-semibold py-2">Advanced filters</summary><div class="row g-2 pt-2">
+                <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionDatePreset">Date preset</label><select class="form-select form-select-sm" id="transactionDatePreset"><option value="">Custom range</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="this_week">This week</option><option value="last_week">Last week</option><option value="this_month">This month</option><option value="last_month">Last month</option><option value="this_year">This year</option></select></div>
+                <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionStart">From date</label><input class="form-control form-control-sm" type="date" id="transactionStart" name="start" value="<?= htmlspecialchars($txStart, ENT_QUOTES, 'UTF-8') ?>"></div>
+                <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionEnd">To date</label><input class="form-control form-control-sm" type="date" id="transactionEnd" name="end" value="<?= htmlspecialchars($txEnd, ENT_QUOTES, 'UTF-8') ?>"></div>
+                <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionMinAmount">Minimum amount</label><input class="form-control form-control-sm" type="number" min="0" step="0.01" id="transactionMinAmount" name="min_amount" value="<?= htmlspecialchars($txMinAmount, ENT_QUOTES, 'UTF-8') ?>"></div>
+                <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionMaxAmount">Maximum amount</label><input class="form-control form-control-sm" type="number" min="0" step="0.01" id="transactionMaxAmount" name="max_amount" value="<?= htmlspecialchars($txMaxAmount, ENT_QUOTES, 'UTF-8') ?>"></div>
+                <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionMethodFilter">Payment method</label><select class="form-select form-select-sm" id="transactionMethodFilter" name="method"><option value="">All methods</option><option value="cash" <?= $txMethod==='cash'?'selected':'' ?>>Cash</option><option value="mobile" <?= $txMethod==='mobile'?'selected':'' ?>>MoMo</option><option value="card" <?= $txMethod==='card'?'selected':'' ?>>Card</option></select></div>
+                <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionSupplierFilter">Supplier</label><select class="form-select form-select-sm" id="transactionSupplierFilter" name="supplier"><option value="">All suppliers</option><?php foreach($allSuppliersArr as $s): ?><option value="<?= (int)$s['id'] ?>" <?= $txSupplier===(int)$s['id']?'selected':'' ?>><?= htmlspecialchars($s['business_name'], ENT_QUOTES, 'UTF-8') ?></option><?php endforeach; ?></select><div class="form-check mt-1"><input class="form-check-input" type="checkbox" name="no_supplier" value="1" id="transactionNoSupplier" <?= $txNoSupplier?'checked':'' ?>><label class="form-check-label small" for="transactionNoSupplier">No supplier linked</label></div></div>
+                <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionClientFilter">Client</label><select class="form-select form-select-sm" id="transactionClientFilter" name="client"><option value="">All clients</option><?php foreach($clientsArr as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $txClient===(int)$c['id']?'selected':'' ?>><?= htmlspecialchars($c['full_name'], ENT_QUOTES, 'UTF-8') ?></option><?php endforeach; ?></select><div class="form-check mt-1"><input class="form-check-input" type="checkbox" name="no_client" value="1" id="transactionNoClient" <?= $txNoClient?'checked':'' ?>><label class="form-check-label small" for="transactionNoClient">No client linked</label></div></div>
+                <div class="col-12 d-flex flex-wrap gap-2"><button class="btn btn-sm btn-primary">Apply Filters</button><a class="btn btn-sm btn-outline-light" href="transactions.php">Clear All Filters</a><label class="ms-auto small d-flex align-items-center gap-2" for="transactionPageSize">Rows per page<select class="form-select form-select-sm" id="transactionPageSize" name="page_size" style="width:auto"><option <?= $txPageSize===10?'selected':'' ?>>10</option><option <?= $txPageSize===25?'selected':'' ?>>25</option><option <?= $txPageSize===50?'selected':'' ?>>50</option><option <?= $txPageSize===100?'selected':'' ?>>100</option></select></label></div>
+              </div></details></div>
             </form>
+            <?php if ($txFilterError !== ''): ?><div class="alert alert-warning py-2" role="alert"><?= htmlspecialchars($txFilterError, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+            <div class="small text-muted mb-2">Active filters: <?= $txType !== '' || $txSearch !== '' || $txStart !== '' || $txEnd !== '' || $txMinAmount !== '' || $txMaxAmount !== '' || $txMethod !== '' || $txSupplier || $txClient || $txNoSupplier || $txNoClient ? 'Yes' : 'None' ?><?php if ($txType !== '' || $txSearch !== '' || $txStart !== '' || $txEnd !== '' || $txMinAmount !== '' || $txMaxAmount !== '' || $txMethod !== '' || $txSupplier || $txClient || $txNoSupplier || $txNoClient): ?> · <a href="transactions.php">Clear All Filters</a><?php endif; ?></div>
             <table id="transactionsTable" class="table table-borderless table-sm table-striped table-hover table-brand">
               <thead>
                 <tr class="text-muted small">
@@ -527,12 +612,12 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                       data-method="<?= htmlspecialchars($t['payment_method'] ?? '', ENT_QUOTES) ?>"
                       data-desc="<?= htmlspecialchars($t['description'] ?? '', ENT_QUOTES) ?>"
                       aria-label="Edit transaction"><i class="bi bi-pencil-square"></i></button>
-                    <form method="POST" class="d-inline-block ms-1 tx-delete-form" data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES) ?>" data-invoice-id="<?= (int)($t['invoice_id'] ?? 0) ?>" data-invoice-number="<?= htmlspecialchars($t['invoice_number'] ?? '', ENT_QUOTES) ?>">
+                    <?php if ($t['type'] === 'payment' && !empty($t['invoice_id'])): ?><span class="badge bg-secondary" title="Posted invoice payments are preserved in financial history">Protected payment</span><?php else: ?><form method="POST" class="d-inline-block ms-1 tx-delete-form" data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES) ?>" data-invoice-id="<?= (int)($t['invoice_id'] ?? 0) ?>" data-invoice-number="<?= htmlspecialchars($t['invoice_number'] ?? '', ENT_QUOTES) ?>">
                       <?= csrf_input() ?>
                       <input type="hidden" name="action" value="delete">
                       <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
                       <button class="btn btn-sm btn-danger" aria-label="Delete transaction"><i class="bi bi-trash"></i></button>
-                    </form>
+                    </form><?php endif; ?>
                   </td>
                 </tr>
                 <?php endwhile; ?>
@@ -542,8 +627,8 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
           <div class="d-flex justify-content-between align-items-center mt-3">
             <small class="text-muted" role="status">Showing <?= $txTotal ? $txOffset + 1 : 0 ?>–<?= min($txOffset + $txPageSize, $txTotal) ?> of <?= $txTotal ?> transactions</small>
             <?php if ($txTotal > $txPageSize): ?><nav aria-label="Transaction pages"><ul class="pagination pagination-sm mb-0">
-              <?php foreach (['Previous'=>$txPage-1,'Next'=>$txPage+1] as $label=>$targetPage): if (($label==='Previous' && $txPage<=1) || ($label==='Next' && $txPage>=$txPages)) continue; ?>
-                <li class="page-item"><a class="page-link" href="?<?= htmlspecialchars(http_build_query(array_filter(['q'=>$txSearch,'type'=>$txType,'sort'=>$txSort,'page'=>$targetPage], fn($value)=>$value!=='')), ENT_QUOTES, 'UTF-8') ?>"><?= $label ?></a></li>
+              <?php foreach (['First'=>$txPages > 1 ? 1 : $txPage,'Previous'=>$txPage-1,'Next'=>$txPage+1,'Last'=>$txPages] as $label=>$targetPage): if (($label==='First' || $label==='Previous') && $txPage<=1) continue; if (($label==='Next' || $label==='Last') && $txPage>=$txPages) continue; ?>
+                <li class="page-item"><a class="page-link" href="?<?= htmlspecialchars(http_build_query($txQueryParams + ['page'=>$targetPage]), ENT_QUOTES, 'UTF-8') ?>"><?= $label ?></a></li>
               <?php endforeach; ?>
               <li class="page-item disabled"><span class="page-link">Page <?= $txPage ?> of <?= $txPages ?></span></li>
             </ul></nav><?php endif; ?>
@@ -861,6 +946,36 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
         event.preventDefault();
       }
     });
+  });
+</script>
+<script>
+  const transactionFiltersForm = document.querySelector('form[aria-label="Filter transactions"]');
+  const transactionSearchInput = document.getElementById('transactionSearch');
+  let transactionSearchTimer;
+  transactionSearchInput?.addEventListener('input', () => {
+    window.clearTimeout(transactionSearchTimer);
+    transactionSearchTimer = window.setTimeout(() => transactionFiltersForm?.requestSubmit(), 350);
+  });
+  ['transactionTypeFilter','transactionSort','transactionPageSize'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => transactionFiltersForm?.requestSubmit());
+  });
+  const datePreset = document.getElementById('transactionDatePreset');
+  datePreset?.addEventListener('change', function() {
+    if (!this.value) return;
+    const startInput = document.getElementById('transactionStart');
+    const endInput = document.getElementById('transactionEnd');
+    const today = new Date();
+    const iso = date => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    let end = new Date(start);
+    if (this.value === 'yesterday') start.setDate(start.getDate()-1), end = new Date(start);
+    if (this.value === 'this_week') start.setDate(start.getDate()-((start.getDay()+6)%7));
+    if (this.value === 'last_week') { start.setDate(start.getDate()-((start.getDay()+6)%7)-7); end = new Date(start); end.setDate(end.getDate()+6); }
+    if (this.value === 'this_month') start.setDate(1);
+    if (this.value === 'last_month') { start.setDate(1); start.setMonth(start.getMonth()-1); end = new Date(start.getFullYear(), start.getMonth()+1, 0); }
+    if (this.value === 'this_year') start.setMonth(0,1);
+    startInput.value = iso(start);
+    endInput.value = iso(end);
   });
 </script>
 <?php if (isset($_GET['edit_transaction']) && filter_var($_GET['edit_transaction'], FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]])): ?>
