@@ -1,7 +1,7 @@
 // Single service worker for both the static Supabase app (dist/) and the PHP pages (/public/).
 // Asset URLs are scope-relative so the same file works whether it is served from the
 // site root or from the /public/ directory.
-const CACHE_NAME = "lmg-cm-v4";
+const CACHE_NAME = "lmg-cm-v5";
 const CORE_ASSETS = [
   "./",
   "./index.html",

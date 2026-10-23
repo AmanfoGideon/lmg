@@ -16,6 +16,7 @@ let clients = [];
 let invoices = [];
 let suppliers = [];
 let transactions = [];
+let filteredTransactions = [];
 let editModal;
 let createSupplierModal;
 let supplierModalTarget = "create";
@@ -234,9 +235,10 @@ function openReceipt(transaction) {
 function renderTransactions(query = "") {
   const body = document.getElementById("transactionRows");
   const filtered = transactions.filter((transaction) => {
-    const search = `${transaction.clients?.full_name || transaction.client_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.suppliers?.business_name || transaction.supplier_name || ""} ${paymentMethodLabel(transaction.payment_method)} ${transaction.description || ""}`;
+    const search = `${transaction.id} ${transaction.clients?.full_name || transaction.client_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.suppliers?.business_name || transaction.supplier_name || ""} ${paymentMethodLabel(transaction.payment_method)} ${transaction.description || ""}`;
     return search.toLowerCase().includes(query.toLowerCase());
   });
+  filteredTransactions = filtered;
   if (!filtered.length) {
     setEmptyRow(body, 9, query ? "No transactions match this search." : "No transactions have been recorded yet.");
     return;
@@ -288,6 +290,36 @@ function renderTransactions(query = "") {
     row.append(actions);
     return row;
   }));
+}
+
+function printTransactions() {
+  if (!filteredTransactions.length) {
+    showNotice("There are no transactions to print for this search.", "warning");
+    return;
+  }
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    showNotice("Allow pop-ups to open the printable transaction table.", "warning");
+    return;
+  }
+  const rows = filteredTransactions.map((transaction) => `<tr>
+    <td>${escapeHtml(transaction.id)}</td>
+    <td>${escapeHtml(transaction.date || "")}</td>
+    <td>${escapeHtml(transaction.type || "")}</td>
+    <td>${escapeHtml(transaction.description || "—")}</td>
+    <td>${escapeHtml(transaction.clients?.full_name || transaction.client_name || "—")}</td>
+    <td>${escapeHtml(transaction.suppliers?.business_name || transaction.supplier_name || "—")}</td>
+    <td>${escapeHtml(transaction.invoices?.invoice_number || "—")}</td>
+    <td>${escapeHtml(paymentMethodLabel(transaction.payment_method))}</td>
+    <td class="amount">${escapeHtml(`${currencySymbol}${Number(transaction.amount || 0).toFixed(2)}`)}</td>
+  </tr>`).join("");
+  const searchTerm = document.getElementById("transactionSearch").value.trim();
+  printWindow.document.open();
+  printWindow.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Transactions</title><style>
+    body{font:12px/1.4 Arial,sans-serif;color:#111;margin:24px}h1{font-size:20px;margin:0 0 4px}.meta{color:#555;margin-bottom:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:6px;text-align:left;vertical-align:top}th{background:#eee}.amount{text-align:right;white-space:nowrap}thead{display:table-header-group}tr{break-inside:avoid}@page{size:landscape;margin:12mm}@media print{body{margin:0}}
+  </style></head><body><h1>Transactions</h1><div class="meta">${filteredTransactions.length} matching transactions${searchTerm ? ` · Search: ${escapeHtml(searchTerm)}` : ""}</div><table><thead><tr><th>ID</th><th>Date</th><th>Type</th><th>Description</th><th>Client</th><th>Supplier</th><th>Invoice</th><th>Payment Method</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+  printWindow.document.close();
+  window.setTimeout(() => printWindow.print(), 300);
 }
 
 function openEdit(transaction) {
@@ -525,5 +557,6 @@ export async function initTransactions() {
     }
   });
   document.getElementById("transactionSearch").addEventListener("input", debounce((event) => renderTransactions(event.target.value.trim()), 200));
+  document.getElementById("printTransactions").addEventListener("click", printTransactions);
   await loadTransactions();
 }
