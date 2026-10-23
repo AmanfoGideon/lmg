@@ -154,7 +154,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
 </head>
 <body class="report-page">
 <div class="app-shell d-flex">
-  <?php $active_page='dashboard'; include "../includes/layout/sidebar.php"; ?>
+    <?php $active_page='reports'; include "../includes/layout/sidebar.php"; ?>
 
   <main class="main flex-grow-1 p-4">
     <?php $page_title='Financial Reports'; $page_subtitle='Daily, weekly or monthly summaries'; $header_actions='<a class="btn btn-outline-light me-2 no-print" href="supplier_reports.php">Supplier Reports</a><a class="btn btn-outline-light me-2 no-print" href="suppliers.php">Supplier Accounts</a><a class="btn btn-outline-light me-2 no-print" href="supplier_bills.php">Supplier Bills</a><button class="btn btn-outline-light me-2 no-print" type="button" onclick="window.print()"'.($reportError !== '' ? ' disabled' : '').'><i class="bi bi-printer"></i> Print</button>'; include "../includes/layout/header.php"; ?>

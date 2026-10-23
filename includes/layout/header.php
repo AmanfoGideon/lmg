@@ -58,6 +58,14 @@ function fmtCurrency($amount) {
   <div class="d-flex align-items-center">
     <button id="btnInstallApp" class="btn btn-outline-light me-2" style="display:none" aria-label="Install app">Install App</button>
     <button id="btnSidebarToggle" class="btn btn-outline-light me-2" aria-label="Toggle sidebar" aria-controls="appSidebar" aria-expanded="false"><i class="bi bi-chevron-left"></i></button>
+    <details class="quick-actions me-2">
+      <summary class="btn btn-primary" aria-label="Open quick actions"><i class="bi bi-plus-lg" aria-hidden="true"></i><span class="quick-actions-label"> Create</span></summary>
+      <nav class="quick-actions-menu" aria-label="Create a record">
+        <a href="transactions.php"><i class="bi bi-wallet2" aria-hidden="true"></i> New transaction</a>
+        <a href="invoice_create.php"><i class="bi bi-receipt" aria-hidden="true"></i> New invoice</a>
+        <a href="suppliers.php"><i class="bi bi-truck" aria-hidden="true"></i> Add supplier</a>
+      </nav>
+    </details>
     <?= $header_actions ?>
     <div class="me-3 text-end">
       <div class="fs-6">Welcome back,</div>

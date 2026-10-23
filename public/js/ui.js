@@ -79,10 +79,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const group = btn.closest('.menu-group');
     const key = 'sidebarGroup:' + (btn.dataset.group || '');
     if (key && localStorage.getItem(key) === '1') group.classList.add('open');
+    btn.setAttribute('aria-expanded', group.classList.contains('open') ? 'true' : 'false');
     btn.addEventListener('click', () => {
       const willOpen = !group.classList.contains('open');
       group.classList.toggle('open', willOpen);
+      btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
       if (key) localStorage.setItem(key, willOpen ? '1' : '0');
+    });
+  });
+
+  document.addEventListener('click', event => {
+    if (event.target.closest('.quick-actions')) return;
+    document.querySelectorAll('.quick-actions[open]').forEach(menu => { menu.open = false; });
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    document.querySelectorAll('.quick-actions[open]').forEach(menu => {
+      menu.open = false;
+      menu.querySelector('summary')?.focus();
     });
   });
 

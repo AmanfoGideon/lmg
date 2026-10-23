@@ -9,13 +9,15 @@ $suppliersActive = ($active_page==='suppliers' || in_array($current, $supplierPa
 $txActive = ($active_page==='transactions' || $current==='transactions.php') ? ' active' : '';
 $smsActive = ($active_page==='sms' || $current==='sms.php') ? ' active' : '';
 $productsActive = ($active_page==='products' || $current==='products.php') ? ' active' : '';
-$invoicesActive = ($active_page==='invoices' || $current==='invoices.php' || $current==='invoice_create.php' || $current==='invoice_view.php') ? ' active' : '';
+$invoicesActive = ($active_page==='invoices' || $current==='invoices.php' || $current==='invoice_edit.php' || $current==='invoice_view.php') ? ' active' : '';
+$invoiceCreateActive = ($current==='invoice_create.php') ? ' active' : '';
 $usersActive = ($active_page==='users' || $current==='users.php') ? ' active' : '';
 $auditActive = ($active_page==='audit' || $current==='audit_logs.php') ? ' active' : '';
 $profileActive = ($active_page==='profile' || $current==='profile.php') ? ' active' : '';
 $userName = htmlspecialchars($_SESSION['full_name'] ?? '');
 $openManagement = ($clientsActive || $suppliersActive || $txActive || $smsActive || $invoicesActive || $productsActive) ? ' open' : '';
-$openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='reports') ? ' open' : '';
+$openReports = (in_array($current, ['reports.php', 'supplier_reports.php'], true) || ($dashActive && isset($_GET['section']) && $_GET['section']==='reports')) ? ' open' : '';
+$openAdmin = ($usersActive || $auditActive || $current==='backup.php') ? ' open' : '';
 ?>
 <aside id="appSidebar" class="sidebar d-flex flex-column p-3">
   <div class="brand d-flex align-items-center mb-3">
@@ -32,7 +34,6 @@ $openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='re
     <div class="flex-grow-1">
       <div class="fw-bold"><?= $userName ?></div>
       <div class="small">
-        <a class="link-light me-2" href="profile.php">Profile</a>
         <a class="link-danger" id="btnLogout" href="logout.php">Logout</a>
       </div>
     </div>
@@ -42,11 +43,11 @@ $openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='re
       <i class="bi bi-speedometer2"></i> <span class="nav-text">Dashboard</span>
     </a>
     <div class="menu-group<?= $openManagement ?>">
-      <button type="button" class="nav-link w-100 text-start menu-group-toggle" data-group="management">
+      <button type="button" class="nav-link w-100 text-start menu-group-toggle" data-group="management" aria-controls="managementMenu" aria-expanded="<?= $openManagement ? 'true' : 'false' ?>">
         <span><i class="bi bi-grid"></i> <span class="nav-text">Management</span></span>
         <i class="bi bi-chevron-down caret"></i>
       </button>
-      <div class="submenu">
+      <div class="submenu" id="managementMenu">
         <a href="clients.php" class="nav-link<?= $clientsActive ?>" title="Clients"<?= $clientsActive ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-people"></i> <span class="nav-text">Clients</span>
         </a>
@@ -68,7 +69,7 @@ $openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='re
         <a href="sms.php" class="nav-link<?= $smsActive ?>" title="SMS"<?= $smsActive ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-chat-dots"></i> <span class="nav-text">SMS</span>
         </a>
-        <a href="invoice_create.php" class="nav-link<?= ($current==='invoice_create.php')?' active':'' ?>" title="New Invoice"<?= ($current==='invoice_create.php')?' aria-current="page"':'' ?>>
+        <a href="invoice_create.php" class="nav-link<?= $invoiceCreateActive ?>" title="New Invoice"<?= $invoiceCreateActive ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-plus-square"></i> <span class="nav-text">New Invoice</span>
         </a>
         <a href="invoices.php" class="nav-link<?= ($current==='invoices.php')?' active':'' ?>" title="Invoices List"<?= ($current==='invoices.php')?' aria-current="page"':'' ?>>
@@ -77,33 +78,36 @@ $openReports = ($dashActive && isset($_GET['section']) && $_GET['section']==='re
       </div>
     </div>
     <div class="menu-group<?= $openReports ?>">
-      <button type="button" class="nav-link w-100 text-start menu-group-toggle" data-group="reports">
+      <button type="button" class="nav-link w-100 text-start menu-group-toggle" data-group="reports" aria-controls="reportsMenu" aria-expanded="<?= $openReports ? 'true' : 'false' ?>">
         <span><i class="bi bi-bar-chart-line"></i> <span class="nav-text">Reports</span></span>
         <i class="bi bi-chevron-down caret"></i>
       </button>
-      <div class="submenu">
+      <div class="submenu" id="reportsMenu">
         <a href="dashboard.php#monthlyChartSection" class="nav-link" title="Revenue & Trends">
           <i class="bi bi-graph-up-arrow"></i> <span class="nav-text">Revenue & Trends</span>
         </a>
-        <a href="reports.php" class="nav-link<?= ($current==='reports.php')?' active':'' ?>" title="Reports">
+        <a href="reports.php" class="nav-link<?= ($current==='reports.php')?' active':'' ?>" title="Reports"<?= $current==='reports.php' ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-file-earmark-bar-graph"></i> <span class="nav-text">Financial Reports</span>
+        </a>
+        <a href="supplier_reports.php" class="nav-link<?= ($current==='supplier_reports.php')?' active':'' ?>" title="Supplier Reports"<?= $current==='supplier_reports.php' ? ' aria-current="page"' : '' ?>>
+          <i class="bi bi-truck"></i> <span class="nav-text">Supplier Reports</span>
         </a>
       </div>
     </div>
     <?php if ($role === 'admin'): ?>
-    <div class="menu-group<?= ($usersActive || $auditActive) ? ' open':'' ?>">
-      <button type="button" class="nav-link w-100 text-start menu-group-toggle" data-group="admin">
+    <div class="menu-group<?= $openAdmin ?>">
+      <button type="button" class="nav-link w-100 text-start menu-group-toggle" data-group="admin" aria-controls="adminMenu" aria-expanded="<?= $openAdmin ? 'true' : 'false' ?>">
         <span><i class="bi bi-shield-lock"></i> <span class="nav-text">Administration</span></span>
         <i class="bi bi-chevron-down caret"></i>
       </button>
-      <div class="submenu">
+      <div class="submenu" id="adminMenu">
         <a href="users.php" class="nav-link<?= $usersActive ?>" title="Manage Users"<?= $usersActive ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-people-gear"></i> <span class="nav-text">Users</span>
         </a>
         <a href="audit_logs.php" class="nav-link<?= $auditActive ?>" title="Audit Trail"<?= $auditActive ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-journal-text"></i> <span class="nav-text">Audit Trail</span>
         </a>
-        <a href="backup.php" class="nav-link<?= ($current==='backup.php')?' active':'' ?>" title="Backup">
+        <a href="backup.php" class="nav-link<?= ($current==='backup.php')?' active':'' ?>" title="Backup"<?= ($current==='backup.php')?' aria-current="page"':'' ?>>
           <i class="bi bi-database-lock"></i> <span class="nav-text">Backup</span>
         </a>
       </div>

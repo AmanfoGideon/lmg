@@ -60,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = 'Payment could not be recorded. Please try again.';
         error_log('Invoice payment failed: '.$e->getMessage());
       }
-    } elseif ($client_id > 0) {
+    } elseif ($client_id > 0 || ($type === 'expense' && (int)($_POST['supplier_id'] ?? 0) > 0)) {
       if ($payment_method && !in_array($payment_method, ['cash','mobile','card'])) { $payment_method = null; }
       $supplier_id = $type === 'expense' && (int)($_POST['supplier_id'] ?? 0) > 0 ? (int)$_POST['supplier_id'] : null;
       if ($supplier_id !== null) {
@@ -75,20 +75,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
       }
       if (!$transactionSupplierValid) {
-        $client_id = 0;
-      }
-      if ($client_id <= 0) {
+        // Keep the validation error and do not write an invalid supplier link.
+      } elseif ($client_id <= 0 && !($type === 'expense' && $supplier_id !== null)) {
         $message = $message ?: 'Specify a client by name';
       } else {
+      $transactionClientId = $client_id > 0 ? $client_id : null;
       $conn->begin_transaction();
       $stmt = $conn->prepare("INSERT INTO transactions (client_id, supplier_id, amount, type, payment_method, description, date) VALUES (?,?,?,?,?,?,?)");
-      $stmt->bind_param('iidssss', $client_id, $supplier_id, $amount, $type, $payment_method, $description, $date);
+      $stmt->bind_param('iidssss', $transactionClientId, $supplier_id, $amount, $type, $payment_method, $description, $date);
       $message = $stmt->execute() ? 'Transaction added' : 'Error adding transaction';
       if ($message === 'Transaction added') {
-        log_action($conn, 'transaction_create', (string)$client_id.'|'.$type.'|'.$amount, [
+        log_action($conn, 'transaction_create', (string)($client_id ?: 'supplier-only').'|'.$type.'|'.$amount, [
           'action' => 'transaction.'.($type === 'income' ? 'income' : ($type === 'expense' ? 'expense' : $type)).'.created',
           'entity_id' => (string)$stmt->insert_id,
-          'new_values' => ['client_id'=>$client_id,'supplier_id'=>$supplier_id,'amount'=>$amount,'type'=>$type,'payment_method'=>$payment_method,'description'=>$description,'date'=>$date]
+          'new_values' => ['client_id'=>$transactionClientId,'supplier_id'=>$supplier_id,'amount'=>$amount,'type'=>$type,'payment_method'=>$payment_method,'description'=>$description,'date'=>$date]
         ]);
         $conn->commit();
       } else {
@@ -249,13 +249,60 @@ while ($sRow = $suppliers->fetch_assoc()) { $suppliersArr[] = $sRow; }
 $allSuppliersResult = $conn->query("SELECT id, business_name, contact_person, phone, status FROM suppliers ORDER BY business_name ASC");
 $allSuppliersArr = [];
 while ($sRow = $allSuppliersResult->fetch_assoc()) { $allSuppliersArr[] = $sRow; }
-$txLimit = (isset($_GET['format']) && $_GET['format'] === 'json') ? ' LIMIT 100' : '';
-$tx = $conn->query("SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, t.invoice_id, t.supplier_id, c.full_name AS client, i.invoice_number, s.business_name AS supplier_name
+$txIsJson = isset($_GET['format']) && $_GET['format'] === 'json';
+$txSearch = trim((string)($_GET['q'] ?? ''));
+$txType = in_array($_GET['type'] ?? '', ['income','expense','invoice','payment'], true) ? (string)$_GET['type'] : '';
+$txPage = max(1, (int)($_GET['page'] ?? 1));
+$txPageSize = 25;
+$txWhere = [];
+$txParams = [];
+$txTypes = '';
+if ($txSearch !== '' && !$txIsJson) {
+  $txWhere[] = "(CAST(t.id AS CHAR) LIKE ? OR c.full_name LIKE ? OR s.business_name LIKE ? OR i.invoice_number LIKE ? OR t.description LIKE ?)";
+  $searchLike = '%'.$txSearch.'%';
+  array_push($txParams, $searchLike, $searchLike, $searchLike, $searchLike, $searchLike);
+  $txTypes .= 'sssss';
+}
+if ($txType !== '' && !$txIsJson) {
+  $txWhere[] = 't.type=?';
+  $txParams[] = $txType;
+  $txTypes .= 's';
+}
+$txEditId = filter_var($_GET['edit_transaction'] ?? null, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]) ?: 0;
+if ($txEditId > 0 && !$txIsJson) {
+  $txWhere[] = 't.id=?';
+  $txParams[] = $txEditId;
+  $txTypes .= 'i';
+}
+$txWhereSql = $txWhere ? ' WHERE '.implode(' AND ', $txWhere) : '';
+$txTotal = 0;
+$txOffset = 0;
+if (!$txIsJson) {
+  $countTx = $conn->prepare("SELECT COUNT(*) FROM transactions t LEFT JOIN clients c ON c.id=t.client_id LEFT JOIN invoices i ON i.id=t.invoice_id LEFT JOIN suppliers s ON s.id=t.supplier_id".$txWhereSql);
+  if ($txTypes !== '') $countTx->bind_param($txTypes, ...$txParams);
+  $countTx->execute();
+  $countTx->bind_result($txTotal);
+  $countTx->fetch();
+  $countTx->close();
+  $txTotal = (int)$txTotal;
+  $txPages = max(1, (int)ceil($txTotal / $txPageSize));
+  $txPage = min($txPage, $txPages);
+  $txOffset = ($txPage - 1) * $txPageSize;
+}
+$txSql = "SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, t.invoice_id, t.supplier_id, c.full_name AS client, i.invoice_number, s.business_name AS supplier_name
                     FROM transactions t
                     LEFT JOIN clients c ON c.id=t.client_id
                     LEFT JOIN invoices i ON i.id=t.invoice_id
                     LEFT JOIN suppliers s ON s.id=t.supplier_id
-                    ORDER BY t.date DESC, t.id DESC".$txLimit);
+                    ".$txWhereSql." ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?";
+$txStmt = $conn->prepare($txSql);
+$txListTypes = $txTypes.'ii';
+$txListParams = $txParams;
+$txListParams[] = $txIsJson ? 100 : $txPageSize;
+$txListParams[] = $txIsJson ? 0 : $txOffset;
+$txStmt->bind_param($txListTypes, ...$txListParams);
+$txStmt->execute();
+$tx = $txStmt->get_result();
 $userName = htmlspecialchars($_SESSION['full_name']);
 $role = $_SESSION['role'] ?? 'staff';
 $payload = [];
@@ -382,13 +429,13 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
       <div class="col-lg-8">
         <div id="listTx" class="card p-3">
           <h6 class="mb-3">Recent Transactions</h6>
-          <div class="transaction-type-filters d-flex flex-wrap gap-2 mb-3" role="group" aria-label="Filter transactions by type">
-            <button type="button" class="btn btn-sm btn-outline-light active" data-transaction-filter="all" aria-pressed="true">All Transactions</button>
-            <button type="button" class="btn btn-sm btn-outline-success" data-transaction-filter="income" aria-pressed="false"><i class="bi bi-arrow-down-left me-1" aria-hidden="true"></i>Income</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" data-transaction-filter="expense" aria-pressed="false"><i class="bi bi-arrow-up-right me-1" aria-hidden="true"></i>Expenses</button>
-          </div>
           <div class="table-responsive">
-            <table id="transactionsTable" class="table table-borderless table-sm table-striped table-hover table-brand datatable">
+            <form method="GET" class="row g-2 mb-3" role="search" aria-label="Search transactions">
+              <div class="col-sm-7"><label class="visually-hidden" for="transactionSearch">Search transactions</label><input class="form-control form-control-sm" type="search" id="transactionSearch" name="q" value="<?= htmlspecialchars($txSearch, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search client, supplier, invoice, description or ID"></div>
+              <div class="col-sm-3"><label class="visually-hidden" for="transactionTypeFilter">Transaction type</label><select class="form-select form-select-sm" id="transactionTypeFilter" name="type"><option value="">All types</option><?php foreach (['income'=>'Income','expense'=>'Expense','invoice'=>'Invoice','payment'=>'Payment'] as $value=>$label): ?><option value="<?= $value ?>" <?= $txType===$value?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
+              <div class="col-sm-2"><button class="btn btn-sm btn-outline-light w-100">Search</button></div>
+            </form>
+            <table id="transactionsTable" class="table table-borderless table-sm table-striped table-hover table-brand">
               <thead>
                 <tr class="text-muted small">
                   <th>#</th>
@@ -404,10 +451,13 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                 </tr>
               </thead>
               <tbody>
+                <?php if ($txTotal === 0): ?>
+                  <tr><td colspan="10" class="text-center text-muted py-4">No transactions match this search. <a href="transactions.php">Clear filters</a> or record a transaction.</td></tr>
+                <?php endif; ?>
                 <?php while($t = $tx->fetch_assoc()): ?>
                 <tr>
                   <td><?= (int)$t['id'] ?></td>
-                  <td><?= htmlspecialchars($t['client']) ?></td>
+                  <td><?= htmlspecialchars($t['client'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
                   <td class="text-capitalize"><?= htmlspecialchars($t['type']) ?></td>
                   <td class="text-muted small">
                     <?php if (!empty($t['invoice_number'])): ?>
@@ -446,6 +496,15 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                 <?php endwhile; ?>
               </tbody>
               </table>
+          </div>
+          <div class="d-flex justify-content-between align-items-center mt-3">
+            <small class="text-muted" role="status">Showing <?= $txTotal ? $txOffset + 1 : 0 ?>–<?= min($txOffset + $txPageSize, $txTotal) ?> of <?= $txTotal ?> transactions</small>
+            <?php if ($txTotal > $txPageSize): ?><nav aria-label="Transaction pages"><ul class="pagination pagination-sm mb-0">
+              <?php foreach (['Previous'=>$txPage-1,'Next'=>$txPage+1] as $label=>$targetPage): if (($label==='Previous' && $txPage<=1) || ($label==='Next' && $txPage>=$txPages)) continue; ?>
+                <li class="page-item"><a class="page-link" href="?<?= htmlspecialchars(http_build_query(array_filter(['q'=>$txSearch,'type'=>$txType,'page'=>$targetPage], fn($value)=>$value!=='')), ENT_QUOTES, 'UTF-8') ?>"><?= $label ?></a></li>
+              <?php endforeach; ?>
+              <li class="page-item disabled"><span class="page-link">Page <?= $txPage ?> of <?= $txPages ?></span></li>
+            </ul></nav><?php endif; ?>
           </div>
         </div>
       </div>
@@ -625,60 +684,6 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   })();
 </script>
 <script>
-  jQuery(function($){
-    $('table.datatable').each(function(){
-      const el = this;
-      if ($.fn.DataTable.isDataTable(el)) return;
-        const table = $(el).DataTable({
-          destroy: true,
-          pageLength: 10,
-          lengthMenu: [10,25,50,100],
-          order: [],
-          stateSave: true,
-          language: { searchPlaceholder: 'Search...', emptyTable: 'No transactions found.', zeroRecords: 'No transactions found.' }
-        });
-
-        const filterButtons = document.querySelectorAll('[data-transaction-filter]');
-        const emptyMessages = {
-          all: 'No transactions found.',
-          income: 'No income transactions found.',
-          expense: 'No expense transactions found.'
-        };
-        function setTransactionFilter(filter) {
-          const isTypedFilter = filter !== 'all';
-          table.column(2).search(isTypedFilter ? '^' + filter + '$' : '', isTypedFilter, false);
-          filterButtons.forEach(function(button) {
-            const active = button.dataset.transactionFilter === filter;
-            button.classList.toggle('active', active);
-            button.setAttribute('aria-pressed', active ? 'true' : 'false');
-          });
-          table.settings()[0].oLanguage.sEmptyTable = emptyMessages[filter];
-          table.settings()[0].oLanguage.sZeroRecords = emptyMessages[filter];
-          table.draw();
-        }
-        filterButtons.forEach(function(button) {
-          button.addEventListener('click', function() {
-            setTransactionFilter(button.dataset.transactionFilter);
-          });
-        });
-
-        // Reflect any type filter restored by DataTables' existing saved table state.
-        const savedTypeSearch = table.column(2).search();
-        const savedFilter = savedTypeSearch === '^income$' ? 'income'
-          : savedTypeSearch === '^expense$' ? 'expense'
-            : 'all';
-        filterButtons.forEach(function(button) {
-          const active = button.dataset.transactionFilter === savedFilter;
-          button.classList.toggle('active', active);
-          button.setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
-        table.settings()[0].oLanguage.sEmptyTable = emptyMessages[savedFilter];
-        table.settings()[0].oLanguage.sZeroRecords = emptyMessages[savedFilter];
-        table.draw(false);
-    });
-  });
-</script>
-<script>
   // Handle supplier modal
   const addSupplierModalEl = document.getElementById('addSupplierModal');
   const addSupplierBsModal = new bootstrap.Modal(addSupplierModalEl);
@@ -737,15 +742,18 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   // Show supplier dropdown only for expenses
   function toggleSupplierRow() {
     const supplierRow = supplierSelect.closest('.col-12');
+    const clientName = document.getElementById('clientNameTx');
     if (typeSelect.value === 'expense') {
       supplierRow.style.display = '';
     } else {
       supplierRow.style.display = 'none';
       supplierSelect.value = '';
     }
+    if (clientName) clientName.required = !(typeSelect.value === 'expense' && supplierSelect.value !== '');
   }
 
   typeSelect.addEventListener('change', toggleSupplierRow);
+  supplierSelect.addEventListener('change', toggleSupplierRow);
   toggleSupplierRow(); // Initialize on page load
 
   (function(){
@@ -816,15 +824,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
 <?php if (isset($_GET['edit_transaction']) && filter_var($_GET['edit_transaction'], FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]])): ?>
 <script>
   document.addEventListener('DOMContentLoaded', function() {
-    if (!window.jQuery || !jQuery.fn.DataTable || !jQuery.fn.DataTable.isDataTable('#transactionsTable')) return;
-    const wantedId = <?= (int)$_GET['edit_transaction'] ?>;
-    const table = jQuery('#transactionsTable').DataTable();
-    table.search('').columns().search('').draw();
-    const row = table.rows().nodes().toArray().find(function(node) {
-      const button = node.querySelector('.btn-edit');
-      return button && Number(button.dataset.id) === wantedId;
-    });
-    row?.querySelector('.btn-edit')?.click();
+    document.querySelector('#transactionsTable .btn-edit')?.click();
   });
 </script>
 <?php endif; ?>

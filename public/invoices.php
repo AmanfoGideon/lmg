@@ -100,16 +100,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   }
 }
 $clients = $conn->query("SELECT id, full_name FROM clients ORDER BY full_name ASC");
-$invoices = $conn->query("SELECT i.id, i.invoice_number, i.invoice_date, i.due_date, i.total,
+$invoiceIsJson = isset($_GET['format']) && $_GET['format'] === 'json';
+$invoiceSearch = trim((string)($_GET['q'] ?? ''));
+$invoicePage = max(1, (int)($_GET['page'] ?? 1));
+$invoicePageSize = 25;
+$invoiceWhere = ' WHERE i.cancelled_at IS NULL';
+$invoiceSearchParams = [];
+if ($invoiceSearch !== '' && !$invoiceIsJson) {
+  $invoiceWhere .= ' AND (i.invoice_number LIKE ? OR c.full_name LIKE ?)';
+  $invoiceLike = '%'.$invoiceSearch.'%';
+  $invoiceSearchParams = [$invoiceLike, $invoiceLike];
+}
+$invoiceTotal = 0;
+$invoiceOffset = 0;
+if (!$invoiceIsJson) {
+  $invoiceCount = $conn->prepare('SELECT COUNT(*) FROM invoices i LEFT JOIN clients c ON c.id=i.client_id'.$invoiceWhere);
+  if ($invoiceSearchParams) $invoiceCount->bind_param('ss', ...$invoiceSearchParams);
+  $invoiceCount->execute();
+  $invoiceCount->bind_result($invoiceTotal);
+  $invoiceCount->fetch();
+  $invoiceCount->close();
+  $invoiceTotal = (int)$invoiceTotal;
+  $invoicePages = max(1, (int)ceil($invoiceTotal / $invoicePageSize));
+  $invoicePage = min($invoicePage, $invoicePages);
+  $invoiceOffset = ($invoicePage - 1) * $invoicePageSize;
+}
+$invoiceLimit = $invoiceIsJson ? 100 : $invoicePageSize;
+$invoiceSql = "SELECT i.id, i.invoice_number, i.invoice_date, i.due_date, i.total,
                           CASE WHEN COALESCE(SUM(CASE WHEN t.type='payment' THEN t.amount ELSE 0 END),0)<=0 THEN 'unpaid'
                                WHEN COALESCE(SUM(CASE WHEN t.type='payment' THEN t.amount ELSE 0 END),0)<COALESCE(i.total,0) THEN 'partial'
                                ELSE 'paid' END AS status,
                           c.full_name AS client
                           FROM invoices i LEFT JOIN clients c ON c.id=i.client_id
                           LEFT JOIN transactions t ON t.invoice_id=i.id
-                          WHERE i.cancelled_at IS NULL
+                          ".$invoiceWhere."
                           GROUP BY i.id, i.invoice_number, i.invoice_date, i.due_date, i.total, c.full_name
-                          ORDER BY i.invoice_date DESC, i.id DESC LIMIT 100");
+                          ORDER BY i.invoice_date DESC, i.id DESC LIMIT ? OFFSET ?";
+$invoiceStmt = $conn->prepare($invoiceSql);
+$invoiceListParams = $invoiceSearchParams;
+$invoiceListParams[] = $invoiceLimit;
+$invoiceListParams[] = $invoiceOffset;
+$invoiceListTypes = ($invoiceSearchParams ? 'ss' : '').'ii';
+$invoiceStmt->bind_param($invoiceListTypes, ...$invoiceListParams);
+$invoiceStmt->execute();
+$invoices = $invoiceStmt->get_result();
 $userName = htmlspecialchars($_SESSION['full_name']);
 $role = $_SESSION['role'] ?? 'staff';
 $payload = [];
@@ -169,7 +203,11 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
             <a class="btn btn-sm btn-outline-light" href="invoice_create.php"><i class="bi bi-plus-lg"></i> New</a>
           </div>
           <div class="table-responsive">
-            <table class="table table-borderless table-sm table-striped table-hover table-brand datatable">
+            <form method="GET" class="row g-2 mb-3" role="search" aria-label="Search invoices">
+              <div class="col-sm-9"><label class="visually-hidden" for="invoiceSearch">Search invoices</label><input class="form-control form-control-sm" type="search" id="invoiceSearch" name="q" value="<?= htmlspecialchars($invoiceSearch, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search invoice number or client"></div>
+              <div class="col-sm-3"><button class="btn btn-sm btn-outline-light w-100">Search</button></div>
+            </form>
+            <table class="table table-borderless table-sm table-striped table-hover table-brand">
               <thead>
                 <tr class="text-muted small">
                   <th>Invoice #</th>
@@ -181,6 +219,9 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                 </tr>
               </thead>
               <tbody>
+                <?php if ($invoiceTotal === 0): ?>
+                  <tr><td colspan="6" class="text-center text-muted py-4">No invoices match this search. <a href="invoice_create.php">Create an invoice</a> or <a href="invoices.php">clear filters</a>.</td></tr>
+                <?php endif; ?>
                 <?php while($i = $invoices->fetch_assoc()): ?>
                 <tr>
                   <td><?= htmlspecialchars($i['invoice_number']) ?></td>
@@ -205,6 +246,15 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
               </tbody>
             </table>
           </div>
+          <div class="d-flex justify-content-between align-items-center mt-3">
+            <small class="text-muted" role="status">Showing <?= $invoiceTotal ? $invoiceOffset + 1 : 0 ?>–<?= min($invoiceOffset + $invoicePageSize, $invoiceTotal) ?> of <?= $invoiceTotal ?> invoices</small>
+            <?php if ($invoiceTotal > $invoicePageSize): ?><nav aria-label="Invoice pages"><ul class="pagination pagination-sm mb-0">
+              <?php foreach (['Previous'=>$invoicePage-1,'Next'=>$invoicePage+1] as $label=>$targetPage): if (($label==='Previous' && $invoicePage<=1) || ($label==='Next' && $invoicePage>=$invoicePages)) continue; ?>
+                <li class="page-item"><a class="page-link" href="?<?= htmlspecialchars(http_build_query(array_filter(['q'=>$invoiceSearch,'page'=>$targetPage], fn($value)=>$value!=='')), ENT_QUOTES, 'UTF-8') ?>"><?= $label ?></a></li>
+              <?php endforeach; ?>
+              <li class="page-item disabled"><span class="page-link">Page <?= $invoicePage ?> of <?= $invoicePages ?></span></li>
+            </ul></nav><?php endif; ?>
+          </div>
         </div>
       </div>
     </div>
@@ -223,19 +273,6 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
         event.preventDefault();
         return;
       }
-    });
-  });
-  jQuery(function($){
-    $('table.datatable').each(function(){
-      const el = this;
-      if ($.fn.DataTable.isDataTable(el)) return;
-      $(el).DataTable({
-        pageLength: 10,
-        lengthMenu: [10,25,50,100],
-        order: [],
-        stateSave: true,
-        language: { searchPlaceholder: 'Search...' }
-      });
     });
   });
 </script>

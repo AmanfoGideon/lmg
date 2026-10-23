@@ -64,6 +64,7 @@ async function navigate(view, pushHistory = true) {
     section.classList.toggle("d-none", section.id !== `view-${view}`);
   });
   document.querySelectorAll("[data-view-link]").forEach((link) => {
+    if (link.closest(".quick-actions")) return;
     const active = link.dataset.viewLink === view;
     link.classList.toggle("active", active);
     if (active) link.setAttribute("aria-current", "page");
@@ -87,9 +88,26 @@ function hideLoadingScreen() {
 }
 
 document.querySelectorAll("[data-view-link]").forEach((link) => {
-  link.addEventListener("click", (event) => {
+  link.addEventListener("click", async (event) => {
     event.preventDefault();
-    navigate(link.dataset.viewLink);
+    document.querySelectorAll(".quick-actions[open]").forEach((menu) => { menu.open = false; });
+    await navigate(link.dataset.viewLink);
+    const invoiceForm = document.getElementById("invoiceForm");
+    if (link.dataset.quickAction === "invoice" && invoiceForm?.classList.contains("d-none")) {
+      document.getElementById("toggleInvoiceForm")?.click();
+    }
+  });
+});
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".quick-actions")) return;
+  document.querySelectorAll(".quick-actions[open]").forEach((menu) => { menu.open = false; });
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  document.querySelectorAll(".quick-actions[open]").forEach((menu) => {
+    menu.open = false;
+    menu.querySelector("summary")?.focus();
   });
 });
 

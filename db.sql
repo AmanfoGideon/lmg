@@ -59,7 +59,7 @@ CREATE INDEX idx_clients_name ON clients(full_name);
 -- =======================================
 CREATE TABLE IF NOT EXISTS transactions (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  client_id INT NOT NULL,
+  client_id INT NULL,
   amount DECIMAL(10,2) NOT NULL,
   type ENUM('income', 'expense', 'invoice', 'payment') NOT NULL,
   description TEXT,

@@ -90,7 +90,15 @@
       <header class="d-flex align-items-center justify-content-between mb-4">
         <div><h1 id="pageTitle" class="h2 mb-0">Clients</h1><small id="pageSubtitle" class="text-muted">Manage client records</small></div>
         <div class="d-flex align-items-center gap-3">
-          <button id="btnSidebarToggle" class="btn btn-outline-light" aria-label="Toggle sidebar" aria-controls="appSidebar"><i class="bi bi-chevron-left"></i></button>
+          <button id="btnSidebarToggle" class="btn btn-outline-light" aria-label="Toggle sidebar" aria-controls="appSidebar" aria-expanded="false"><i class="bi bi-chevron-left"></i></button>
+          <details class="quick-actions">
+            <summary class="btn btn-primary" aria-label="Open quick actions"><i class="bi bi-plus-lg" aria-hidden="true"></i><span class="quick-actions-label"> Create</span></summary>
+            <nav class="quick-actions-menu" aria-label="Create a record">
+              <a href="#transactions" data-view-link="transactions"><i class="bi bi-wallet2" aria-hidden="true"></i> New transaction</a>
+              <a href="#invoices" data-view-link="invoices" data-quick-action="invoice"><i class="bi bi-receipt" aria-hidden="true"></i> New invoice</a>
+              <a href="#suppliers" data-view-link="suppliers"><i class="bi bi-truck" aria-hidden="true"></i> Add supplier</a>
+            </nav>
+          </details>
           <span id="headerName" class="fw-bold"></span>
           <img src="images/logo.png" alt="LMG" class="avatar">
         </div>
