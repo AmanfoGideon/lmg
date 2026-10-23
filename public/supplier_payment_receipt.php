@@ -2,6 +2,7 @@
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
 require_once "../includes/suppliers.php";
+require_once "../includes/payment_methods.php";
 
 $paymentId = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: 0;
 $payment = supplier_payment_get($conn, $paymentId);
@@ -34,7 +35,7 @@ $formatAmount = static fn($amount): string => htmlspecialchars($currencySymbol) 
       <dt class="col-sm-4">Payment number</dt><dd class="col-sm-8"><?= htmlspecialchars($payment['payment_number']) ?></dd>
       <dt class="col-sm-4">Supplier</dt><dd class="col-sm-8"><?= htmlspecialchars($payment['business_name']) ?></dd>
       <dt class="col-sm-4">Payment date</dt><dd class="col-sm-8"><?= htmlspecialchars($payment['payment_date']) ?></dd>
-      <dt class="col-sm-4">Method</dt><dd class="col-sm-8"><?= htmlspecialchars($payment['payment_method']) ?></dd>
+      <dt class="col-sm-4">Method</dt><dd class="col-sm-8"><?= htmlspecialchars(payment_method_label($payment['payment_method'] ?? null)) ?></dd>
       <dt class="col-sm-4">Reference</dt><dd class="col-sm-8"><?= htmlspecialchars($payment['reference_number'] ?? '—') ?></dd>
       <dt class="col-sm-4">Description</dt><dd class="col-sm-8"><?= htmlspecialchars($payment['description'] ?? '—') ?></dd>
       <dt class="col-sm-4">Status</dt><dd class="col-sm-8"><?= htmlspecialchars($payment['status']) ?></dd>

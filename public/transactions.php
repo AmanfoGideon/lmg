@@ -2,6 +2,7 @@
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
 require_once "../includes/log.php";
+require_once "../includes/payment_methods.php";
 require_once "../includes/invoice.php";
 require_once "../includes/suppliers.php";
 
@@ -368,7 +369,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
               <select class="form-select" name="payment_method">
                 <option value="">Payment Method</option>
                 <option value="cash">Cash</option>
-                <option value="mobile">Mobile</option>
+                <option value="mobile">MoMo</option>
                 <option value="card">Card</option>
               </select>
             </div>
@@ -416,7 +417,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                   <td class="text-muted small"><?= htmlspecialchars($t['supplier_name'] ?? '') ?></td>
                   <td><?= fmtCurrency((float)$t['amount']) ?></td>
                   <td class="text-muted small"><?= htmlspecialchars($t['date']) ?></td>
-                  <td class="text-muted small"><?= htmlspecialchars($t['payment_method'] ?? '') ?></td>
+                  <td class="text-muted small"><?= htmlspecialchars(payment_method_label($t['payment_method'] ?? null)) ?></td>
                   <td class="text-muted small"><?= htmlspecialchars($t['description'] ?? '') ?></td>
                   <td>
                     <?php if (in_array($t['type'], ['income','payment'])): ?>
@@ -563,7 +564,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
               <select class="form-select" name="payment_method" id="editMethod">
                 <option value="">Payment Method</option>
                 <option value="cash">Cash</option>
-                <option value="mobile">Mobile</option>
+                <option value="mobile">MoMo</option>
                 <option value="card">Card</option>
               </select>
             </div>

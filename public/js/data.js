@@ -353,9 +353,7 @@ export async function getInvoiceDetails(id) {
 }
 
 export async function listReportBranches() {
-  const { data, error } = await getSupabase().from("transactions").select("branch").not("branch", "is", null);
-  if (error) throw error;
-  return [...new Set(data.map(({ branch }) => branch).filter(Boolean))].sort();
+  return unwrap(await getSupabase().rpc("get_report_branches"));
 }
 
 // EDGE FUNCTION: sms-send

@@ -3,39 +3,54 @@ require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
 require_once "../includes/log.php";
 require_once "../includes/sms.php";
-require_once "../includes/invoice.php";
+require_once "../includes/payment_methods.php";
 
 $id = (int)($_GET['id'] ?? 0);
-$message = isset($_GET['updated']) ? 'Invoice updated.' : '';
-$requestKey = bin2hex(random_bytes(16));
+$message = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-  if (!csrf_verify()) {
-    http_response_code(400);
-    $message = 'Invalid request token.';
-  } else {
   $action = $_POST['action'] ?? '';
-  if ($action === 'add_payment') $requestKey = (string)($_POST['request_key'] ?? '');
   if ($action === 'add_payment') {
-    try {
-      $invoice_id = (int)($_POST['invoice_id'] ?? 0);
-      $payment_method = (string)($_POST['payment_method'] ?? '');
-      if ($payment_method === '') $payment_method = null;
-      $result = invoice_record_payment(
-        $conn,
-        $invoice_id,
-        (string)($_POST['amount'] ?? ''),
-        $payment_method,
-        trim((string)($_POST['description'] ?? '')),
-        (string)($_POST['date'] ?? date('Y-m-d')),
-        (string)($_POST['request_key'] ?? '')
-      );
-      $message = $result['duplicate'] ? 'Payment already recorded' : 'Payment recorded';
-      $requestKey = bin2hex(random_bytes(16));
-    } catch (InvalidArgumentException $e) {
-      $message = $e->getMessage();
-    } catch (Throwable $e) {
-      $message = 'Payment could not be recorded. Please try again.';
-      error_log('Invoice payment failed: '.$e->getMessage());
+    $invoice_id = (int)($_POST['invoice_id'] ?? 0);
+    $client_id = (int)($_POST['client_id'] ?? 0);
+    $amount = (float)($_POST['amount'] ?? 0);
+    $payment_method = $_POST['payment_method'] ?? null;
+    $description = trim($_POST['description'] ?? '');
+    $date = $_POST['date'] ?: date('Y-m-d');
+    if ($payment_method && !in_array($payment_method, ['cash','mobile','card'])) { $payment_method = null; }
+    if ($invoice_id > 0 && $client_id > 0 && $amount > 0) {
+      $check = $conn->prepare("SELECT client_id, total FROM invoices WHERE id=? LIMIT 1");
+      $check->bind_param('i', $invoice_id);
+      $check->execute();
+      $check->bind_result($invClientId,$invTotal);
+      $foundInv = $check->fetch();
+      $check->close();
+      if ($foundInv && (int)$invClientId === $client_id) {
+        $ins = $conn->prepare("INSERT INTO transactions (client_id, amount, type, payment_method, description, date, invoice_id) VALUES (?,?,?,?,?,?,?)");
+        $t = 'payment';
+        $ins->bind_param('idssssi', $client_id, $amount, $t, $payment_method, $description, $date, $invoice_id);
+        $message = $ins->execute() ? 'Payment recorded' : 'Error recording payment';
+        if ($message === 'Payment recorded') {
+          log_action($conn, 'invoice_payment', (string)$invoice_id.'|'.$amount);
+          $sum = $conn->prepare("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE invoice_id=? AND type='payment'");
+          $sum->bind_param('i', $invoice_id);
+          $sum->execute();
+          $sum->bind_result($paidTotal);
+          $sum->fetch();
+          $sum->close();
+          $newStatus = 'unpaid';
+          if ((float)$paidTotal > 0 && (float)$paidTotal < (float)$invTotal) { $newStatus = 'partial'; }
+          if ((float)$paidTotal >= (float)$invTotal) { $newStatus = 'paid'; }
+          $up = $conn->prepare("UPDATE invoices SET status=? WHERE id=?");
+          $up->bind_param('si', $newStatus, $invoice_id);
+          $up->execute();
+          $up->close();
+        }
+        $ins->close();
+      } else {
+        $message = 'Invoice mismatch';
+      }
+    } else {
+      $message = 'Enter valid payment details';
     }
   }
   if ($action === 'send_sms') {
@@ -70,40 +85,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       log_action($conn, 'email_send', (string)$id.'|'.$toEmail);
     }
   }
-  }
 }
-$stmt = $conn->prepare("SELECT i.invoice_number, i.invoice_date, i.due_date, i.subtotal, i.tax, i.total,
-  CASE WHEN COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.invoice_id=i.id AND t.type='payment'),0)<=0 THEN 'unpaid'
-       WHEN COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.invoice_id=i.id AND t.type='payment'),0)<COALESCE(i.total,0) THEN 'partial'
-       ELSE 'paid' END AS status,
-  i.notes, i.client_id, c.full_name, c.email, c.phone, c.address, i.cancelled_at, i.cancellation_reason FROM invoices i LEFT JOIN clients c ON c.id=i.client_id WHERE i.id=?");
+$stmt = $conn->prepare("SELECT i.invoice_number, i.invoice_date, i.due_date, i.subtotal, i.tax, i.total, i.status, i.notes, i.client_id, c.full_name, c.email, c.phone, c.address FROM invoices i LEFT JOIN clients c ON c.id=i.client_id WHERE i.id=?");
 $stmt->bind_param('i', $id);
 $stmt->execute();
-$cancelledAt = null;
-$cancellationReason = null;
-$stmt->bind_result($invoice_number,$invoice_date,$due_date,$subtotal,$tax,$total,$status,$notes,$client_id,$client_name,$client_email,$client_phone,$client_address,$cancelledAt,$cancellationReason);
+$stmt->bind_result($invoice_number,$invoice_date,$due_date,$subtotal,$tax,$total,$status,$notes,$client_id,$client_name,$client_email,$client_phone,$client_address);
 $found = $stmt->fetch();
 $stmt->close();
-
-$paidCents = 0;
-$balanceCents = 0;
-$paymentHistory = [];
-if ($found) {
-  $sumPayments = $conn->prepare("SELECT COALESCE(SUM(amount),0) AS paid FROM transactions WHERE invoice_id=? AND type='payment'");
-  $sumPayments->bind_param('i', $id);
-  $sumPayments->execute();
-  $paidValue = (string)$sumPayments->get_result()->fetch_assoc()['paid'];
-  $sumPayments->close();
-  $paidCents = invoice_money_cents($paidValue) ?? 0;
-  $totalCents = invoice_money_cents((string)$total) ?? 0;
-  $balanceCents = max(0, $totalCents - $paidCents);
-  $historyStmt = $conn->prepare("SELECT id, amount, date, payment_method, description FROM transactions WHERE invoice_id=? AND type='payment' ORDER BY date DESC, id DESC");
-  $historyStmt->bind_param('i', $id);
-  $historyStmt->execute();
-  $historyResult = $historyStmt->get_result();
-  while ($paymentRow = $historyResult->fetch_assoc()) $paymentHistory[] = $paymentRow;
-  $historyStmt->close();
-}
 
 $items = $conn->prepare("SELECT item_name, quantity, price, total FROM invoice_items WHERE invoice_id=? ORDER BY id ASC");
 $items->bind_param('i', $id);
@@ -125,7 +113,7 @@ $role = $_SESSION['role'] ?? 'staff';
   <style>
     @media print {
       @page { size: A4; margin: 12mm; }
-      .sidebar, .nav, .btn, header, footer, .no-print { display:none !important; }
+      .sidebar, .nav, .btn, header, footer { display:none !important; }
       .main { padding:0; }
       body { background:#fff; color:#000; }
       .invoice-paper { background:#fff; color:#000; box-shadow:none; }
@@ -145,14 +133,10 @@ $role = $_SESSION['role'] ?? 'staff';
   <?php $active_page='invoices'; include "../includes/layout/sidebar.php"; ?>
 
   <main class="main flex-grow-1 p-4">
-    <?php $page_title='Invoice '.($invoice_number ?? ''); $page_subtitle='Preview and print'; $header_actions=($found && $cancelledAt === null ? '<a class="btn btn-outline-light me-2" href="invoice_edit.php?id='.(int)$id.'">Edit invoice</a>' : '').'<button class="btn btn-outline-light me-2" onclick="window.print()"><i class="bi bi-printer"></i> Print</button>'; include "../includes/layout/header.php"; ?>
+    <?php $page_title='Invoice '.($invoice_number ?? ''); $page_subtitle='Preview and print'; $header_actions='<button class="btn btn-outline-light me-2" onclick="window.print()"><i class="bi bi-printer"></i> Print</button>'; include "../includes/layout/header.php"; ?>
 
     <?php if ($message): ?>
       <div class="alert alert-info py-2"><?= htmlspecialchars($message) ?></div>
-    <?php endif; ?>
-
-    <?php if ($found && $cancelledAt !== null): ?>
-      <div class="alert alert-warning" role="status"><strong>Cancelled invoice.</strong> Payment and receipt history remain available. Reason: <?= htmlspecialchars($cancellationReason ?? '') ?></div>
     <?php endif; ?>
 
     <?php if(!$found): ?>
@@ -164,7 +148,7 @@ $role = $_SESSION['role'] ?? 'staff';
           <img src="images/logo.png" alt="LMG" style="width:56px" class="me-3">
           <div>
             <div class="fw-bold fs-4">LMG Creative Media</div>
-            <div class="text-muted small">Professional Services</div>
+            <div class="text-muted small">Bringing Creative Ideas to L</div>
           </div>
         </div>
         <div class="text-end">
@@ -172,7 +156,7 @@ $role = $_SESSION['role'] ?? 'staff';
           <div class="text-muted small">Invoice #: <?= htmlspecialchars($invoice_number) ?></div>
           <div class="text-muted small">Date: <?= htmlspecialchars($invoice_date ?? '') ?></div>
           <div class="text-muted small">Due: <?= htmlspecialchars($due_date ?? '') ?></div>
-          <div class="mt-1">Payment status: <span class="badge bg-<?= $status==='paid'?'success':($status==='partial'?'warning text-dark':'secondary') ?>"><?= htmlspecialchars($status) ?></span></div>
+          <div class="mt-1">Status: <span class="badge bg-<?= $status==='paid'?'success':($status==='partial'?'warning text-dark':'secondary') ?>"><?= htmlspecialchars($status) ?></span></div>
         </div>
       </div>
 
@@ -221,8 +205,6 @@ $role = $_SESSION['role'] ?? 'staff';
       </div>
 
       <?php if($notes): ?><div class="mt-3 text-muted small"><?= nl2br(htmlspecialchars($notes)) ?></div><?php endif; ?>
-      <?php if ($cancelledAt === null): ?>
-      <?php if ($status !== 'paid' && $cancelledAt === null): ?>
       <div class="mt-4">
         <div class="card p-3">
           <h6 class="mb-3">Record Payment</h6>
@@ -231,13 +213,12 @@ $role = $_SESSION['role'] ?? 'staff';
             <input type="hidden" name="action" value="add_payment">
             <input type="hidden" name="invoice_id" value="<?= (int)$id ?>">
             <input type="hidden" name="client_id" value="<?= (int)$client_id ?>">
-            <input type="hidden" name="request_key" value="<?= htmlspecialchars($requestKey, ENT_QUOTES) ?>">
             <div class="col-6"><input class="form-control" type="number" step="0.01" name="amount" placeholder="Amount" required></div>
             <div class="col-6">
               <select class="form-select" name="payment_method">
                 <option value="">Payment Method</option>
                 <option value="cash">Cash</option>
-                <option value="mobile">Mobile</option>
+                <option value="mobile">MoMo</option>
                 <option value="card">Card</option>
               </select>
             </div>
@@ -247,7 +228,6 @@ $role = $_SESSION['role'] ?? 'staff';
           </form>
         </div>
       </div>
-      <?php endif; ?>
       <div class="mt-3">
         <div class="card p-3">
           <h6 class="mb-3">Send Reminder SMS</h6>
@@ -273,43 +253,7 @@ $role = $_SESSION['role'] ?? 'staff';
           </form>
         </div>
       </div>
-      <?php endif; ?>
     </div>
-    <section class="card p-3 mt-3 no-print" aria-labelledby="paymentHistoryTitle">
-      <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
-        <h2 id="paymentHistoryTitle" class="h6 mb-0">Payment History</h2>
-        <div class="small text-muted">Received: <?= fmtCurrency($paidCents / 100) ?> · Balance due: <?= fmtCurrency($balanceCents / 100) ?></div>
-      </div>
-      <?php if (!$paymentHistory): ?>
-        <div class="text-muted small">No payments have been recorded for this invoice.</div>
-      <?php else: ?>
-        <div class="table-responsive">
-          <table class="table table-borderless table-sm table-striped table-brand mb-0">
-            <thead><tr class="text-muted small"><th>Payment #</th><th>Date</th><th>Method</th><th>Description</th><th class="text-end">Amount</th><th>Actions</th></tr></thead>
-            <tbody>
-              <?php foreach ($paymentHistory as $paymentRow): ?>
-                <tr>
-                  <td><a href="receipt_view.php?id=<?= (int)$paymentRow['id'] ?>">TXN-<?= (int)$paymentRow['id'] ?></a></td>
-                  <td><?= htmlspecialchars($paymentRow['date']) ?></td>
-                  <td><?= htmlspecialchars($paymentRow['payment_method'] ?: '—') ?></td>
-                  <td><?= htmlspecialchars($paymentRow['description'] ?: '—') ?></td>
-                  <td class="text-end"><?= fmtCurrency((float)$paymentRow['amount']) ?></td>
-                  <td>
-                    <a class="btn btn-sm btn-outline-light" href="transactions.php?edit_transaction=<?= (int)$paymentRow['id'] ?>">Edit</a>
-                    <form method="POST" action="transactions.php" class="d-inline-block ms-1 payment-delete-form" data-payment-id="<?= (int)$paymentRow['id'] ?>" data-amount="<?= fmtCurrency((float)$paymentRow['amount']) ?>">
-                      <?= csrf_input() ?>
-                      <input type="hidden" name="action" value="delete">
-                      <input type="hidden" name="id" value="<?= (int)$paymentRow['id'] ?>">
-                      <button class="btn btn-sm btn-danger" aria-label="Delete payment"><i class="bi bi-trash"></i></button>
-                    </form>
-                  </td>
-                </tr>
-              <?php endforeach; ?>
-            </tbody>
-          </table>
-        </div>
-      <?php endif; ?>
-    </section>
     <?php endif; ?>
 
     <footer class="mt-4 text-center text-muted small">© <?= date('Y') ?> LMG Creative Media</footer>
@@ -317,17 +261,5 @@ $role = $_SESSION['role'] ?? 'staff';
 </div>
 
 <script src="js/ui.js"></script>
-<script>
-  document.querySelectorAll('.payment-delete-form').forEach(function(form) {
-    form.addEventListener('submit', function(event) {
-      const paymentId = form.dataset.paymentId;
-      const amount = form.dataset.amount;
-      const message = `Delete payment TXN-${paymentId} of ${amount}? This will affect the invoice balance and payment status. This cannot be undone.`;
-      if (!window.confirm(message)) {
-        event.preventDefault();
-      }
-    });
-  });
-</script>
 </body>
 </html>

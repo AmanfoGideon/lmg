@@ -68,7 +68,8 @@ const assetUrl = (path) => new URL(path, document.baseURI).href;
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]
 ));
-const PAYMENT_METHOD_LABELS = { cash: "Cash", mobile: "Mobile Money", card: "Card" };
+const PAYMENT_METHOD_LABELS = { cash: "Cash", mobile: "MoMo", card: "Card", unspecified: "Not specified" };
+const paymentMethodLabel = (method) => method ? (PAYMENT_METHOD_LABELS[method] || String(method)) : "Not specified";
 
 // Existing receipt numbering is preserved: RCPT-##### derived from the transaction id.
 const receiptNumber = (transaction) => `RCPT-${String(transaction.id).padStart(5, "0")}`;
@@ -233,7 +234,7 @@ function openReceipt(transaction) {
 function renderTransactions(query = "") {
   const body = document.getElementById("transactionRows");
   const filtered = transactions.filter((transaction) => {
-    const search = `${transaction.clients?.full_name || transaction.client_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.suppliers?.business_name || transaction.supplier_name || ""} ${transaction.description || ""}`;
+    const search = `${transaction.clients?.full_name || transaction.client_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.suppliers?.business_name || transaction.supplier_name || ""} ${paymentMethodLabel(transaction.payment_method)} ${transaction.description || ""}`;
     return search.toLowerCase().includes(query.toLowerCase());
   });
   if (!filtered.length) {
@@ -242,7 +243,7 @@ function renderTransactions(query = "") {
   }
   body.replaceChildren(...filtered.map((transaction) => {
     const row = document.createElement("tr");
-    const values = [transaction.clients?.full_name || transaction.client_name, transaction.type, transaction.invoices?.invoice_number, transaction.suppliers?.business_name || transaction.supplier_name, `${currencySymbol}${Number(transaction.amount).toFixed(2)}`, transaction.date, transaction.payment_method, transaction.description];
+    const values = [transaction.clients?.full_name || transaction.client_name, transaction.type, transaction.invoices?.invoice_number, transaction.suppliers?.business_name || transaction.supplier_name, `${currencySymbol}${Number(transaction.amount).toFixed(2)}`, transaction.date, paymentMethodLabel(transaction.payment_method), transaction.description];
     values.forEach((value) => {
       const cell = document.createElement("td");
       cell.textContent = value ?? "";

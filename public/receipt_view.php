@@ -2,6 +2,7 @@
 require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
 require_once "../includes/log.php";
+require_once "../includes/payment_methods.php";
 
 $id = (int)($_GET['id'] ?? 0);
 $stmt = $conn->prepare("SELECT t.id, t.type, t.amount, t.date, t.payment_method, t.description, c.full_name, c.phone, c.email, i.invoice_number FROM transactions t LEFT JOIN clients c ON c.id=t.client_id LEFT JOIN invoices i ON i.id=t.invoice_id WHERE t.id=?");
@@ -83,7 +84,7 @@ $role = $_SESSION['role'] ?? 'staff';
         <div class="col-md-6 text-end">
           <div class="fw-bold mb-1">Amount</div>
           <div class="fs-4"><?= fmtCurrency((float)$amount) ?></div>
-          <div class="text-muted small"><?= htmlspecialchars(ucfirst($type)) ?><?= $method ? (' • '.htmlspecialchars(ucfirst($method))) : '' ?></div>
+          <div class="text-muted small"><?= htmlspecialchars(ucfirst($type)) ?><?= $method ? (' • '.htmlspecialchars(payment_method_label($method))) : '' ?></div>
         </div>
       </div>
       <div class="mb-3">

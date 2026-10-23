@@ -3,6 +3,7 @@ require_once "../includes/auth_check.php";
 require_once "../includes/db.php";
 require_once "../includes/log.php";
 require_once "../includes/suppliers.php";
+require_once "../includes/payment_methods.php";
 
 // AJAX endpoint for loading outstanding bills
 if (isset($_GET['get_bills']) && isset($_GET['supplier_id'])) {
@@ -193,7 +194,7 @@ $role = $_SESSION['role'] ?? 'staff';
               <label class="form-label">Payment Method *</label>
               <select class="form-select" name="payment_method" id="payment_method" required>
                 <option value="cash">Cash</option>
-                <option value="mobile">Mobile</option>
+                <option value="mobile">MoMo</option>
                 <option value="card">Card</option>
                 <option value="bank_transfer">Bank Transfer</option>
                 <option value="cheque">Cheque</option>
@@ -274,7 +275,7 @@ $role = $_SESSION['role'] ?? 'staff';
                       <td><?= fmtCurrency((float)$payment['amount']) ?></td>
                       <td><?= fmtCurrency($allocated) ?></td>
                       <td class="<?= $balance > 0 ? 'text-warning' : '' ?>"><?= fmtCurrency($balance) ?></td>
-                      <td><?= htmlspecialchars($payment['payment_method']) ?></td>
+                      <td><?= htmlspecialchars(payment_method_label($payment['payment_method'] ?? null)) ?></td>
                       <td>
                         <span class="badge bg-<?= $payment['status'] === 'allocated' ? 'success' : ($payment['status'] === 'cancelled' ? 'secondary' : ($payment['status'] === 'partially_allocated' ? 'info text-dark' : 'warning text-dark')) ?>">
                           <?= htmlspecialchars($payment['status']) ?>
