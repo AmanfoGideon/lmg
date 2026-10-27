@@ -236,8 +236,9 @@ function renderTransactions(query = "") {
   const body = document.getElementById("transactionRows");
   const dateFrom = document.getElementById("dateFrom").value;
   const dateTo = document.getElementById("dateTo").value;
+  const sortBy = document.getElementById("sortBy").value;
   
-  const filtered = transactions.filter((transaction) => {
+  let filtered = transactions.filter((transaction) => {
     // Text search
     const search = `${transaction.id} ${transaction.clients?.full_name || transaction.client_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.suppliers?.business_name || transaction.supplier_name || ""} ${paymentMethodLabel(transaction.payment_method)} ${transaction.description || ""}`;
     const matchesSearch = search.toLowerCase().includes(query.toLowerCase());
@@ -253,6 +254,29 @@ function renderTransactions(query = "") {
     
     return matchesSearch && matchesDate;
   });
+  
+  // Apply sorting
+  filtered.sort((a, b) => {
+    switch (sortBy) {
+      case "date_desc":
+        return new Date(b.date || 0) - new Date(a.date || 0);
+      case "date_asc":
+        return new Date(a.date || 0) - new Date(b.date || 0);
+      case "amount_desc":
+        return Number(b.amount || 0) - Number(a.amount || 0);
+      case "amount_asc":
+        return Number(a.amount || 0) - Number(b.amount || 0);
+      case "type":
+        return (a.type || "").localeCompare(b.type || "");
+      case "method_asc":
+        return paymentMethodLabel(a.payment_method).localeCompare(paymentMethodLabel(b.payment_method));
+      case "method_desc":
+        return paymentMethodLabel(b.payment_method).localeCompare(paymentMethodLabel(a.payment_method));
+      default:
+        return 0;
+    }
+  });
+  
   filteredTransactions = filtered;
   if (!filtered.length) {
     setEmptyRow(body, 10, query || dateFrom || dateTo ? "No transactions match this search." : "No transactions have been recorded yet.");
@@ -463,6 +487,11 @@ document.getElementById("dateFrom")?.addEventListener("change", function() {
 });
 
 document.getElementById("dateTo")?.addEventListener("change", function() {
+  renderTransactions(document.getElementById("transactionSearch").value.trim());
+});
+
+// Sort event listener
+document.getElementById("sortBy")?.addEventListener("change", function() {
   renderTransactions(document.getElementById("transactionSearch").value.trim());
 });
 
