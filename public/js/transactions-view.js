@@ -240,11 +240,20 @@ function renderTransactions(query = "") {
   });
   filteredTransactions = filtered;
   if (!filtered.length) {
-    setEmptyRow(body, 9, query ? "No transactions match this search." : "No transactions have been recorded yet.");
+    setEmptyRow(body, 10, query ? "No transactions match this search." : "No transactions have been recorded yet.");
     return;
   }
   body.replaceChildren(...filtered.map((transaction) => {
     const row = document.createElement("tr");
+    // Add checkbox for bulk selection
+    const checkboxCell = document.createElement("td");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "form-check-input bulk-select";
+    checkbox.value = transaction.id;
+    checkboxCell.append(checkbox);
+    row.append(checkboxCell);
+    
     const values = [transaction.clients?.full_name || transaction.client_name, transaction.type, transaction.invoices?.invoice_number, transaction.suppliers?.business_name || transaction.supplier_name, `${currencySymbol}${Number(transaction.amount).toFixed(2)}`, transaction.date, paymentMethodLabel(transaction.payment_method), transaction.description];
     values.forEach((value) => {
       const cell = document.createElement("td");
@@ -321,6 +330,117 @@ function printTransactions() {
   printWindow.document.close();
   window.setTimeout(() => printWindow.print(), 300);
 }
+
+// Bulk actions functionality
+const selectAllCheckbox = document.getElementById("selectAllTx");
+const bulkActionsBtn = document.getElementById("bulkActionsBtn");
+
+function updateBulkActionsButton() {
+  const selectedCount = document.querySelectorAll(".bulk-select:checked").length;
+  bulkActionsBtn.disabled = selectedCount === 0;
+}
+
+if (selectAllCheckbox) {
+  selectAllCheckbox.addEventListener("change", function() {
+    document.querySelectorAll(".bulk-select").forEach(cb => cb.checked = this.checked);
+    updateBulkActionsButton();
+  });
+}
+
+document.addEventListener("change", function(e) {
+  if (e.target.classList.contains("bulk-select")) {
+    updateBulkActionsButton();
+  }
+});
+
+// Export CSV
+document.getElementById("exportCsv")?.addEventListener("click", function() {
+  const rows = filteredTransactions.map(t => 
+    `${t.id},${t.date},${t.type},"${t.description || ''}","${t.clients?.full_name || ''}","${t.suppliers?.business_name || ''}","${t.invoices?.invoice_number || ''}","${paymentMethodLabel(t.payment_method)}",${t.amount}`
+  ).join("\n");
+  const csv = `ID,Date,Type,Description,Client,Supplier,Invoice,Payment Method,Amount\n${rows}`;
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `transactions_${new Date().toISOString().split('T')[0]}.csv`;
+  link.click();
+});
+
+// Export Excel (tab-separated)
+document.getElementById("exportExcel")?.addEventListener("click", function() {
+  const rows = filteredTransactions.map(t => 
+    `${t.id}\t${t.date}\t${t.type}\t${t.description || ''}\t${t.clients?.full_name || ''}\t${t.suppliers?.business_name || ''}\t${t.invoices?.invoice_number || ''}\t${paymentMethodLabel(t.payment_method)}\t${t.amount}`
+  ).join("\n");
+  const excel = `ID\tDate\tType\tDescription\tClient\tSupplier\tInvoice\tPayment Method\tAmount\n${rows}`;
+  const blob = new Blob([excel], { type: "application/vnd.ms-excel;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `transactions_${new Date().toISOString().split('T')[0]}.xls`;
+  link.click();
+});
+
+// Bulk export
+document.getElementById("bulkExport")?.addEventListener("click", function(e) {
+  e.preventDefault();
+  const selectedIds = Array.from(document.querySelectorAll(".bulk-select:checked")).map(cb => cb.value);
+  if (selectedIds.length === 0) {
+    showNotice("Please select at least one transaction to export.", "warning");
+    return;
+  }
+  const selected = filteredTransactions.filter(t => selectedIds.includes(String(t.id)));
+  const rows = selected.map(t => 
+    `${t.id},${t.date},${t.type},"${t.description || ''}","${t.clients?.full_name || ''}","${t.suppliers?.business_name || ''}","${t.invoices?.invoice_number || ''}","${paymentMethodLabel(t.payment_method)}",${t.amount}`
+  ).join("\n");
+  const csv = `ID,Date,Type,Description,Client,Supplier,Invoice,Payment Method,Amount\n${rows}`;
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `transactions_selected_${new Date().toISOString().split('T')[0]}.csv`;
+  link.click();
+});
+
+// Bulk print
+document.getElementById("bulkPrint")?.addEventListener("click", function(e) {
+  e.preventDefault();
+  const selectedIds = Array.from(document.querySelectorAll(".bulk-select:checked")).map(cb => cb.value);
+  if (selectedIds.length === 0) {
+    showNotice("Please select at least one transaction to print.", "warning");
+    return;
+  }
+  const selected = filteredTransactions.filter(t => selectedIds.includes(String(t.id)));
+  // Reuse printTransactions with filtered selection
+  const originalFiltered = filteredTransactions;
+  filteredTransactions = selected;
+  printTransactions();
+  filteredTransactions = originalFiltered;
+});
+
+// Bulk delete
+document.getElementById("bulkDelete")?.addEventListener("click", async function(e) {
+  e.preventDefault();
+  const selectedIds = Array.from(document.querySelectorAll(".bulk-select:checked")).map(cb => cb.value);
+  if (selectedIds.length === 0) {
+    showNotice("Please select at least one transaction to delete.", "warning");
+    return;
+  }
+  if (!confirm(`Delete ${selectedIds.length} selected transaction(s)? This action cannot be undone.`)) {
+    return;
+  }
+  let deletedCount = 0;
+  for (const id of selectedIds) {
+    try {
+      await removeTransaction(id);
+      deletedCount++;
+    } catch (error) {
+      console.error(`Failed to delete transaction ${id}:`, error);
+    }
+  }
+  showNotice(`Deleted ${deletedCount} transaction(s).`);
+  await loadTransactions();
+  // Reset checkboxes
+  selectAllCheckbox.checked = false;
+  updateBulkActionsButton();
+});
 
 function openEdit(transaction) {
   document.getElementById("editTransactionId").value = transaction.id;
