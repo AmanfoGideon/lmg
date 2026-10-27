@@ -14,9 +14,10 @@ $invoiceCreateActive = ($current==='invoice_create.php') ? ' active' : '';
 $usersActive = ($active_page==='users' || $current==='users.php') ? ' active' : '';
 $auditActive = ($active_page==='audit' || $current==='audit_logs.php') ? ' active' : '';
 $profileActive = ($active_page==='profile' || $current==='profile.php') ? ' active' : '';
+$paymentSummaryActive = ($current==='payment_method_summary.php') ? ' active' : '';
 $userName = htmlspecialchars($_SESSION['full_name'] ?? '');
 $openManagement = ($clientsActive || $suppliersActive || $txActive || $smsActive || $invoicesActive || $productsActive) ? ' open' : '';
-$openReports = (in_array($current, ['reports.php', 'supplier_reports.php'], true) || ($dashActive && isset($_GET['section']) && $_GET['section']==='reports')) ? ' open' : '';
+$openReports = (in_array($current, ['reports.php', 'supplier_reports.php', 'payment_method_summary.php'], true) || ($dashActive && isset($_GET['section']) && $_GET['section']==='reports')) ? ' open' : '';
 $openAdmin = ($usersActive || $auditActive || $current==='backup.php') ? ' open' : '';
 ?>
 <aside id="appSidebar" class="sidebar d-flex flex-column p-3">
@@ -88,6 +89,9 @@ $openAdmin = ($usersActive || $auditActive || $current==='backup.php') ? ' open'
         </a>
         <a href="reports.php" class="nav-link<?= ($current==='reports.php')?' active':'' ?>" title="Reports"<?= $current==='reports.php' ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-file-earmark-bar-graph"></i> <span class="nav-text">Financial Reports</span>
+        </a>
+        <a href="payment_method_summary.php" class="nav-link<?= $paymentSummaryActive ?>" title="Payment Method Summary"<?= $current==='payment_method_summary.php' ? ' aria-current="page"' : '' ?>>
+          <i class="bi bi-credit-card"></i> <span class="nav-text">Payment Methods</span>
         </a>
         <a href="supplier_reports.php" class="nav-link<?= ($current==='supplier_reports.php')?' active':'' ?>" title="Supplier Reports"<?= $current==='supplier_reports.php' ? ' aria-current="page"' : '' ?>>
           <i class="bi bi-truck"></i> <span class="nav-text">Supplier Reports</span>
