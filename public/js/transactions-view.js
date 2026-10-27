@@ -234,13 +234,28 @@ function openReceipt(transaction) {
 
 function renderTransactions(query = "") {
   const body = document.getElementById("transactionRows");
+  const dateFrom = document.getElementById("dateFrom").value;
+  const dateTo = document.getElementById("dateTo").value;
+  
   const filtered = transactions.filter((transaction) => {
+    // Text search
     const search = `${transaction.id} ${transaction.clients?.full_name || transaction.client_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.suppliers?.business_name || transaction.supplier_name || ""} ${paymentMethodLabel(transaction.payment_method)} ${transaction.description || ""}`;
-    return search.toLowerCase().includes(query.toLowerCase());
+    const matchesSearch = search.toLowerCase().includes(query.toLowerCase());
+    
+    // Date filter
+    let matchesDate = true;
+    if (dateFrom && transaction.date) {
+      matchesDate = matchesDate && transaction.date >= dateFrom;
+    }
+    if (dateTo && transaction.date) {
+      matchesDate = matchesDate && transaction.date <= dateTo;
+    }
+    
+    return matchesSearch && matchesDate;
   });
   filteredTransactions = filtered;
   if (!filtered.length) {
-    setEmptyRow(body, 10, query ? "No transactions match this search." : "No transactions have been recorded yet.");
+    setEmptyRow(body, 10, query || dateFrom || dateTo ? "No transactions match this search." : "No transactions have been recorded yet.");
     return;
   }
   body.replaceChildren(...filtered.map((transaction) => {
@@ -440,6 +455,23 @@ document.getElementById("bulkDelete")?.addEventListener("click", async function(
   // Reset checkboxes
   selectAllCheckbox.checked = false;
   updateBulkActionsButton();
+});
+
+// Date filter event listeners
+document.getElementById("dateFrom")?.addEventListener("change", function() {
+  renderTransactions(document.getElementById("transactionSearch").value.trim());
+});
+
+document.getElementById("dateTo")?.addEventListener("change", function() {
+  renderTransactions(document.getElementById("transactionSearch").value.trim());
+});
+
+// Clear filters
+document.getElementById("clearFilters")?.addEventListener("click", function() {
+  document.getElementById("transactionSearch").value = "";
+  document.getElementById("dateFrom").value = "";
+  document.getElementById("dateTo").value = "";
+  renderTransactions("");
 });
 
 function openEdit(transaction) {
