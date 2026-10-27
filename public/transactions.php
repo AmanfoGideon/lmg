@@ -175,7 +175,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           $message = 'Transaction not found';
         }
       }
-    } elseif ($action === 'update') {
+    } elseif ($action === 'bulk_delete') {
+    if (!csrf_verify()) {
+      $message = 'Invalid request token';
+    } else {
+      $ids = explode(',', $_POST['ids'] ?? '');
+      $deletedCount = 0;
+      foreach ($ids as $id) {
+        $id = (int)trim($id);
+        if ($id > 0) {
+          $del = $conn->prepare("DELETE FROM transactions WHERE id=? AND (type<>'payment' OR invoice_id IS NULL)");
+          $del->bind_param('i', $id);
+          if ($del->execute() && $del->affected_rows > 0) {
+            $deletedCount++;
+            log_action($conn, 'transaction_bulk_delete', 'Bulk delete', ['ids' => $_POST['ids']]);
+          }
+          $del->close();
+        }
+      }
+      $message = "Deleted $deletedCount transaction(s)";
+    }
+  } elseif ($action === 'update') {
       $txId = (int)($_POST['id'] ?? 0);
       if ($txId > 0) {
         $oldStmt = $conn->prepare("SELECT client_id, supplier_id, amount, type, date, payment_method, description, invoice_id FROM transactions WHERE id=? LIMIT 1");
@@ -398,6 +418,25 @@ if (!$txIsJson && ($_GET['export'] ?? '') === 'csv') {
   $exportStmt->close();
   exit;
 }
+if (!$txIsJson && ($_GET['export'] ?? '') === 'excel') {
+  if ($txFilterError !== '') { http_response_code(422); exit($txFilterError); }
+  $exportSql = "SELECT t.id, t.date, t.type, t.description, c.full_name AS client, s.business_name AS supplier, i.invoice_number, t.payment_method, t.amount FROM transactions t LEFT JOIN clients c ON c.id=t.client_id LEFT JOIN invoices i ON i.id=t.invoice_id LEFT JOIN suppliers s ON s.id=t.supplier_id".$txWhereSql." ORDER BY ".$txSortOptions[$txSort];
+  $exportStmt = $conn->prepare($exportSql);
+  if ($txTypes !== '') $exportStmt->bind_param($txTypes, ...$txParams);
+  $exportStmt->execute();
+  $exportRows = $exportStmt->get_result();
+  header('Content-Type: application/vnd.ms-excel');
+  header('Content-Disposition: attachment; filename="transactions_'.date('Ymd').'.xls"');
+  header('Pragma: no-cache');
+  header('Expires: 0');
+  echo "\xEF\xBB\xBF"; // BOM for Excel UTF-8
+  echo "ID\tDate\tType\tDescription\tClient\tSupplier\tInvoice\tPayment Method\tAmount\n";
+  while ($row = $exportRows->fetch_assoc()) {
+    echo $row['id']."\t".$row['date']."\t".ucfirst($row['type'])."\t".($row['description'] ?? '')."\t".($row['client'] ?? '')."\t".($row['supplier'] ?? '')."\t".($row['invoice_number'] ?? '')."\t".payment_method_label($row['payment_method'] ?? null)."\t".number_format((float)$row['amount'],2)."\n";
+  }
+  $exportStmt->close();
+  exit;
+}
 if (!$txIsJson && ($_GET['print'] ?? '') === '1') {
   if ($txFilterError !== '') { http_response_code(422); exit(htmlspecialchars($txFilterError, ENT_QUOTES, 'UTF-8')); }
   $printSql = "SELECT t.id, t.date, t.type, t.description, c.full_name AS client, s.business_name AS supplier, i.invoice_number, t.payment_method, t.amount FROM transactions t LEFT JOIN clients c ON c.id=t.client_id LEFT JOIN invoices i ON i.id=t.invoice_id LEFT JOIN suppliers s ON s.id=t.supplier_id".$txWhereSql." ORDER BY ".$txSortOptions[$txSort];
@@ -522,6 +561,34 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     .type-invoice { color: #fd7e14; }
     .type-payment { color: #0d6efd; }
 
+    .skeleton-row {
+      height: 48px;
+      margin-bottom: 8px;
+      animation: shimmer 1.5s infinite;
+    }
+
+    .skeleton-cell {
+      height: 20px;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
+
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    .table-loading .skeleton-row {
+      display: table-row;
+    }
+
+    .table-loading .skeleton-cell {
+      display: table-cell;
+      padding: 0.5rem;
+    }
+
     .filter-panel {
       background: rgba(255, 255, 255, 0.5);
       border: 1px solid rgba(255, 255, 255, 0.1);
@@ -620,7 +687,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   <?php $active_page='transactions'; include "../includes/layout/sidebar.php"; ?>
 
   <main class="main flex-grow-1 p-4">
-    <?php $page_title='Transactions'; $page_subtitle='Record income, expenses, invoices and payments'; $header_actions='<a class="btn btn-black me-2" href="#addTx"><i class="bi bi-plus-lg"></i> New Transaction</a>'; include "../includes/layout/header.php"; ?>
+    <?php $page_title='Transactions'; $page_subtitle='Record income, expenses, invoices and payments'; $header_actions='<button class="btn btn-black me-2" data-bs-toggle="modal" data-bs-target="#globalSearchModal"><i class="bi bi-search"></i> Global Search</button><a class="btn btn-black me-2" href="#addTx"><i class="bi bi-plus-lg"></i> New Transaction</a>'; include "../includes/layout/header.php"; ?>
 
     <?php if ($message): ?>
       <div class="alert alert-info py-2" role="alert" aria-live="polite"><?= htmlspecialchars($message) ?></div>
@@ -799,6 +866,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
             <table id="transactionsTable" class="table table-borderless table-sm table-striped table-hover premium-table">
               <thead>
                 <tr class="text-white">
+                  <th><input type="checkbox" class="form-check-input bulk-select-all" id="selectAllTx"></th>
                   <th>#</th>
                   <th class="tx-col-client sortable" data-sort="client">
                     Client
@@ -839,10 +907,10 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                   <th>Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody id="transactionsTableBody">
                 <?php if ($txTotal === 0): ?>
                   <tr>
-                    <td colspan="10" class="text-center text-muted py-4">
+                    <td colspan="11" class="text-center text-muted py-4">
                       <i class="bi bi-inbox display-4 d-block mb-2"></i>
                       No transactions match this search.
                       <a href="transactions.php" class="btn btn-sm btn-outline-light mt-2">Clear filters</a>
@@ -852,6 +920,30 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                 <?php endif; ?>
                 <?php while($t = $tx->fetch_assoc()): ?>
                 <tr>
+                  <td class="text-muted small"><?= (int)$t['id'] ?></td>
+                  <td class="tx-col-client text-truncate"><?= htmlspecialchars($t['client'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
+                  <td>
+                    <span class="badge bg-<?= $t['type'] === 'income' ? 'success' : ($t['type'] === 'expense' ? 'danger' : ($t['type'] === 'invoice' ? 'warning text-dark' : 'info')) ?> type-<?= $t['type'] ?>">
+                      <?= htmlspecialchars(ucfirst($t['type'])) ?>
+                    </span>
+                  </td>
+                  <td class="text-muted small tx-col-invoice">
+                    <?php if (!empty($t['invoice_number'])): ?>
+                      <a class="link-light" href="invoice_view.php?id=<?= (int)$t['invoice_id'] ?>"><?= htmlspecialchars($t['invoice_number']) ?></a>
+                    <?php else: ?>
+                      —
+                    <?php endif; ?>
+                  </td>
+                  <td class="text-muted small tx-col-supplier text-truncate"><?= htmlspecialchars($t['supplier_name'] ?? '—') ?></td>
+                  <td class="fw-bold"><?= fmtCurrency((float)$t['amount']) ?></td>
+                  <td class="text-muted small"><?= htmlspecialchars($t['date']) ?></td>
+                  <td class="text-muted small tx-col-method"><?= htmlspecialchars(payment_method_label($t['payment_method'] ?? null)) ?></td>
+                  <td class="text-muted small tx-col-description text-truncate" title="<?= htmlspecialchars($t['description'] ?? '', ENT_QUOTES) ?>">
+                    <?= htmlspecialchars($t['description'] ?? '—') ?>
+                  </td>
+                  <td>
+                    <input type="checkbox" class="form-check-input bulk-select" value="<?= (int)$t['id'] ?>" data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES) ?>" data-invoice-id="<?= (int)($t['invoice_id'] ?? 0) ?>">
+                  </td>
                   <td class="text-muted small"><?= (int)$t['id'] ?></td>
                   <td class="tx-col-client text-truncate"><?= htmlspecialchars($t['client'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
                   <td>
@@ -936,6 +1028,28 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
 
     <footer class="mt-4 text-center text-muted small">© <?= date('Y') ?> LMG Creative Media</footer>
   </main>
+</div>
+
+<!-- Global Search Modal -->
+<div class="modal fade" id="globalSearchModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Global Search</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="input-group mb-3">
+          <input type="text" class="form-control" id="globalSearchInput" placeholder="Search transactions, clients, suppliers, invoices...">
+          <button class="btn btn-primary" type="button" id="globalSearchBtn">Search</button>
+        </div>
+        <div id="globalSearchResults" class="d-none">
+          <h6 class="mb-3">Results</h6>
+          <ul class="list-unstyled" id="globalSearchList"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Add Supplier Modal -->
@@ -1335,6 +1449,114 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
         this.click();
       }
     });
+  });
+
+  // Bulk select functionality
+  const selectAllCheckbox = document.getElementById('selectAllTx');
+  const bulkSelectCheckboxes = document.querySelectorAll('.bulk-select');
+  const bulkActionsBtn = document.getElementById('bulkActionsBtn');
+
+  function updateBulkActionsButton() {
+    const selectedCount = document.querySelectorAll('.bulk-select:checked').length;
+    bulkActionsBtn.disabled = selectedCount === 0;
+  }
+
+  if (selectAllCheckbox) {
+    selectAllCheckbox.addEventListener('change', function() {
+      bulkSelectCheckboxes.forEach(cb => cb.checked = this.checked);
+      updateBulkActionsButton();
+    });
+  }
+
+  bulkSelectCheckboxes.forEach(cb => {
+    cb.addEventListener('change', updateBulkActionsButton);
+  });
+
+  // Bulk actions
+  document.getElementById('bulkExport')?.addEventListener('click', function(e) {
+    e.preventDefault();
+    const selectedIds = Array.from(document.querySelectorAll('.bulk-select:checked')).map(cb => cb.value);
+    if (selectedIds.length === 0) {
+      alert('Please select at least one transaction to export.');
+      return;
+    }
+    const url = new URL(window.location);
+    url.searchParams.set('export', 'csv');
+    url.searchParams.set('ids', selectedIds.join(','));
+    window.location.href = url.toString();
+  });
+
+  document.getElementById('bulkPrint')?.addEventListener('click', function(e) {
+    e.preventDefault();
+    const selectedIds = Array.from(document.querySelectorAll('.bulk-select:checked')).map(cb => cb.value);
+    if (selectedIds.length === 0) {
+      alert('Please select at least one transaction to print.');
+      return;
+    }
+    alert('Print functionality for selected records - implement with filtered print view');
+  });
+
+  document.getElementById('bulkDelete')?.addEventListener('click', function(e) {
+    e.preventDefault();
+    const selectedIds = Array.from(document.querySelectorAll('.bulk-select:checked')).map(cb => cb.value);
+    if (selectedIds.length === 0) {
+      alert('Please select at least one transaction to delete.');
+      return;
+    }
+    if (!confirm(`Delete ${selectedIds.length} selected transaction(s)? This action cannot be undone.`)) {
+      return;
+    }
+    // Submit as form with selected IDs
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'transactions.php';
+    form.innerHTML = '<input type="hidden" name="action" value="bulk_delete">' +
+                     '<input type="hidden" name="ids" value="' + selectedIds.join(',') + '">' +
+                     csrf_input();
+    document.body.appendChild(form);
+    form.submit();
+  });
+
+  // Global search functionality
+  const globalSearchModal = new bootstrap.Modal(document.getElementById('globalSearchModal'));
+  const globalSearchInput = document.getElementById('globalSearchInput');
+  const globalSearchBtn = document.getElementById('globalSearchBtn');
+  const globalSearchResults = document.getElementById('globalSearchResults');
+  const globalSearchList = document.getElementById('globalSearchList');
+
+  globalSearchBtn.addEventListener('click', function() {
+    const query = globalSearchInput.value.trim();
+    if (!query) return;
+    
+    // Search via AJAX
+    fetch('transactions.php?format=json&q=' + encodeURIComponent(query))
+      .then(response => response.json())
+      .then(data => {
+        globalSearchList.innerHTML = '';
+        if (data.items && data.items.length > 0) {
+          data.items.forEach(item => {
+            const li = document.createElement('li');
+            li.className = 'mb-2';
+            li.innerHTML = `<a href="transactions.php?q=${encodeURIComponent(query)}#tx-${item.id}" class="text-decoration-none">
+              <strong>${item.type}</strong>: ${item.description} - ${fmtCurrency(item.amount)}
+            </a>`;
+            globalSearchList.appendChild(li);
+          });
+          globalSearchResults.classList.remove('d-none');
+        } else {
+          globalSearchList.innerHTML = '<li class="text-muted">No results found</li>';
+          globalSearchResults.classList.remove('d-none');
+        }
+      });
+  });
+
+  // Add global search trigger (Ctrl+K)
+  document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.key === 'k') {
+      e.preventDefault();
+      globalSearchModal.show();
+      globalSearchInput.focus();
+    }
   });
   [['transactionSupplierSearch','transactionSupplierFilter'],['transactionClientSearch','transactionClientFilter']].forEach(([searchId, selectId]) => {
     const search = document.getElementById(searchId);
