@@ -291,10 +291,22 @@ while ($sRow = $allSuppliersResult->fetch_assoc()) { $allSuppliersArr[] = $sRow;
 $txIsJson = isset($_GET['format']) && $_GET['format'] === 'json';
 $txSearch = is_string($_GET['q'] ?? null) ? mb_substr(trim($_GET['q']), 0, 120) : '';
 $txType = in_array($_GET['type'] ?? '', ['income','expense','invoice','payment'], true) ? (string)$_GET['type'] : '';
-$txSortOptions = ['date_desc'=>'t.date DESC, t.id DESC','date_asc'=>'t.date ASC, t.id ASC','amount_desc'=>'t.amount DESC, t.id DESC','amount_asc'=>'t.amount ASC, t.id ASC','type'=>'t.type ASC, t.date DESC, t.id DESC','client'=>'c.full_name ASC, t.date DESC, t.id DESC','supplier'=>'s.business_name ASC, t.date DESC, t.id DESC'];
+$txSortOptions = [
+  'date_desc'=>'t.date DESC, t.id DESC',
+  'date_asc'=>'t.date ASC, t.id ASC',
+  'amount_desc'=>'t.amount DESC, t.id DESC',
+  'amount_asc'=>'t.amount ASC, t.id ASC',
+  'type'=>'t.type ASC, t.date DESC, t.id DESC',
+  'client_asc'=>'c.full_name ASC, t.date DESC, t.id DESC',
+  'client_desc'=>'c.full_name DESC, t.date DESC, t.id DESC',
+  'supplier_asc'=>'s.business_name ASC, t.date DESC, t.id DESC',
+  'supplier_desc'=>'s.business_name DESC, t.date DESC, t.id DESC',
+  'description_asc'=>'t.description ASC, t.date DESC, t.id DESC',
+  'description_desc'=>'t.description DESC, t.date DESC, t.id DESC'
+];
 $txSort = is_string($_GET['sort'] ?? null) && isset($txSortOptions[$_GET['sort']]) ? $_GET['sort'] : 'date_desc';
 $txPage = max(1, (int)($_GET['page'] ?? 1));
-$txPageSize = in_array((int)($_GET['page_size'] ?? 25), [10,25,50,100], true) ? (int)($_GET['page_size'] ?? 25) : 25;
+$txPageSize = in_array((int)($_GET['page_size'] ?? 10), [10,25,50,100], true) ? (int)($_GET['page_size'] ?? 10) : 10;
 $txStart = is_string($_GET['start'] ?? null) ? $_GET['start'] : '';
 $txEnd = is_string($_GET['end'] ?? null) ? $_GET['end'] : '';
 $txMinAmount = is_string($_GET['min_amount'] ?? null) ? trim($_GET['min_amount']) : '';
@@ -477,6 +489,26 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
 
     .premium-table tbody tr:hover {
       background-color: rgba(255, 255, 255, 0.05);
+    }
+
+    .premium-table thead th.sortable {
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.15s ease;
+    }
+
+    .premium-table thead th.sortable:hover {
+      background-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .premium-table thead th.sortable:focus {
+      outline: 2px solid rgba(255, 255, 255, 0.5);
+      outline-offset: -2px;
+    }
+
+    .premium-table .sort-indicator {
+      margin-left: 0.25rem;
+      font-size: 0.75rem;
     }
 
     .premium-table .badge {
@@ -709,7 +741,22 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                 </div>
               </div>
               <div class="col-md-3"><label class="visually-hidden" for="transactionTypeFilter">Transaction type</label><select class="form-select form-select-sm" id="transactionTypeFilter" name="type"><option value="">All types</option><?php foreach (['income'=>'Income','expense'=>'Expense','invoice'=>'Invoice','payment'=>'Payment'] as $value=>$label): ?><option value="<?= $value ?>" <?= $txType===$value?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
-              <div class="col-md-2"><label class="visually-hidden" for="transactionSort">Sort transactions</label><select class="form-select form-select-sm" id="transactionSort" name="sort"><option value="date_desc" <?= $txSort==='date_desc'?'selected':'' ?>>Newest</option><option value="date_asc" <?= $txSort==='date_asc'?'selected':'' ?>>Oldest</option><option value="amount_desc" <?= $txSort==='amount_desc'?'selected':'' ?>>Highest amount</option><option value="amount_asc" <?= $txSort==='amount_asc'?'selected':'' ?>>Lowest amount</option><option value="type" <?= $txSort==='type'?'selected':'' ?>>Type</option><option value="client" <?= $txSort==='client'?'selected':'' ?>>Client</option><option value="supplier" <?= $txSort==='supplier'?'selected':'' ?>>Supplier</option></select></div>
+              <div class="col-md-2">
+                <label class="visually-hidden" for="transactionSort">Sort transactions</label>
+                <select class="form-select form-select-sm" id="transactionSort" name="sort">
+                  <option value="date_desc" <?= $txSort==='date_desc'?'selected':'' ?>>Newest</option>
+                  <option value="date_asc" <?= $txSort==='date_asc'?'selected':'' ?>>Oldest</option>
+                  <option value="amount_desc" <?= $txSort==='amount_desc'?'selected':'' ?>>Highest amount</option>
+                  <option value="amount_asc" <?= $txSort==='amount_asc'?'selected':'' ?>>Lowest amount</option>
+                  <option value="type" <?= $txSort==='type'?'selected':'' ?>>Type</option>
+                  <option value="client_asc" <?= $txSort==='client_asc'?'selected':'' ?>>Client A-Z</option>
+                  <option value="client_desc" <?= $txSort==='client_desc'?'selected':'' ?>>Client Z-A</option>
+                  <option value="supplier_asc" <?= $txSort==='supplier_asc'?'selected':'' ?>>Supplier A-Z</option>
+                  <option value="supplier_desc" <?= $txSort==='supplier_desc'?'selected':'' ?>>Supplier Z-A</option>
+                  <option value="description_asc" <?= $txSort==='description_asc'?'selected':'' ?>>Description A-Z</option>
+                  <option value="description_desc" <?= $txSort==='description_desc'?'selected':'' ?>>Description Z-A</option>
+                </select>
+              </div>
               <div class="col-12">
                 <details <?= ($txStart || $txEnd || $txMinAmount !== '' || $txMaxAmount !== '' || $txMethod !== '' || $txSupplier || $txClient || $txNoSupplier || $txNoClient) ? 'open' : '' ?> class="filter-panel">
                   <summary class="small fw-semibold py-2" style="cursor: pointer;">
@@ -727,7 +774,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                 <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionMethodFilter">Payment method</label><select class="form-select form-select-sm" id="transactionMethodFilter" name="method"><option value="">All methods</option><option value="cash" <?= $txMethod==='cash'?'selected':'' ?>>Cash</option><option value="mobile" <?= $txMethod==='mobile'?'selected':'' ?>>MoMo</option><option value="card" <?= $txMethod==='card'?'selected':'' ?>>Card</option></select></div>
                 <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionSupplierSearch">Find supplier</label><input class="form-control form-control-sm mb-1" type="search" id="transactionSupplierSearch" placeholder="Type supplier name"><select class="form-select form-select-sm" id="transactionSupplierFilter" name="supplier"><option value="">All suppliers</option><?php foreach($allSuppliersArr as $s): ?><option value="<?= (int)$s['id'] ?>" data-search="<?= htmlspecialchars(mb_strtolower($s['business_name'].' '.$s['contact_person'].' '.$s['phone']), ENT_QUOTES, 'UTF-8') ?>" <?= $txSupplier===(int)$s['id']?'selected':'' ?>><?= htmlspecialchars($s['business_name'], ENT_QUOTES, 'UTF-8') ?></option><?php endforeach; ?></select><div class="form-check mt-1"><input class="form-check-input" type="checkbox" name="no_supplier" value="1" id="transactionNoSupplier" <?= $txNoSupplier?'checked':'' ?>><label class="form-check-label small" for="transactionNoSupplier">No supplier linked</label></div></div>
                 <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionClientSearch">Find client</label><input class="form-control form-control-sm mb-1" type="search" id="transactionClientSearch" placeholder="Type client name"><select class="form-select form-select-sm" id="transactionClientFilter" name="client"><option value="">All clients</option><?php foreach($clientsArr as $c): ?><option value="<?= (int)$c['id'] ?>" data-search="<?= htmlspecialchars(mb_strtolower($c['full_name']), ENT_QUOTES, 'UTF-8') ?>" <?= $txClient===(int)$c['id']?'selected':'' ?>><?= htmlspecialchars($c['full_name'], ENT_QUOTES, 'UTF-8') ?></option><?php endforeach; ?></select><div class="form-check mt-1"><input class="form-check-input" type="checkbox" name="no_client" value="1" id="transactionNoClient" <?= $txNoClient?'checked':'' ?>><label class="form-check-label small" for="transactionNoClient">No client linked</label></div></div>
-                <div class="col-12 d-flex flex-wrap gap-2"><button class="btn btn-sm btn-primary">Apply Filters</button><a class="btn btn-sm btn-outline-light" href="transactions.php">Clear All Filters</a><label class="ms-auto small d-flex align-items-center gap-2" for="transactionPageSize">Rows per page<select class="form-select form-select-sm" id="transactionPageSize" name="page_size" style="width:auto"><option <?= $txPageSize===10?'selected':'' ?>>10</option><option <?= $txPageSize===25?'selected':'' ?>>25</option><option <?= $txPageSize===50?'selected':'' ?>>50</option><option <?= $txPageSize===100?'selected':'' ?>>100</option></select></label></div>
+                <div class="col-12 d-flex flex-wrap gap-2"><button class="btn btn-sm btn-primary">Apply Filters</button><a class="btn btn-sm btn-outline-light" href="transactions.php">Clear All Filters</a><label class="ms-auto small d-flex align-items-center gap-2" for="transactionPageSize">Rows per page<select class="form-select form-select-sm" id="transactionPageSize" name="page_size" style="width:auto"><option value="10" <?= $txPageSize===10?'selected':'' ?>>10</option><option value="25" <?= $txPageSize===25?'selected':'' ?>>25</option><option value="50" <?= $txPageSize===50?'selected':'' ?>>50</option><option value="100" <?= $txPageSize===100?'selected':'' ?>>100</option></select></label></div>
                   </div>
                 </details>
               </div>
@@ -753,14 +800,42 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
               <thead>
                 <tr class="text-white">
                   <th>#</th>
-                  <th class="tx-col-client">Client</th>
+                  <th class="tx-col-client sortable" data-sort="client">
+                    Client
+                    <span class="sort-indicator">
+                      <?php if ($txSort === 'client_asc'): ?><i class="bi bi-caret-up-fill"></i>
+                      <?php elseif ($txSort === 'client_desc'): ?><i class="bi bi-caret-down-fill"></i>
+                      <?php else: ?><i class="bi bi-caret-up text-muted opacity-25"></i><?php endif; ?>
+                    </span>
+                  </th>
                   <th>Type</th>
                   <th class="tx-col-invoice">Invoice #</th>
-                  <th class="tx-col-supplier">Supplier</th>
+                  <th class="tx-col-supplier sortable" data-sort="supplier">
+                    Supplier
+                    <span class="sort-indicator">
+                      <?php if ($txSort === 'supplier_asc'): ?><i class="bi bi-caret-up-fill"></i>
+                      <?php elseif ($txSort === 'supplier_desc'): ?><i class="bi bi-caret-down-fill"></i>
+                      <?php else: ?><i class="bi bi-caret-up text-muted opacity-25"></i><?php endif; ?>
+                    </span>
+                  </th>
                   <th>Amount</th>
-                  <th>Date</th>
+                  <th class="sortable" data-sort="date">
+                    Date
+                    <span class="sort-indicator">
+                      <?php if ($txSort === 'date_asc'): ?><i class="bi bi-caret-up-fill"></i>
+                      <?php elseif ($txSort === 'date_desc'): ?><i class="bi bi-caret-down-fill"></i>
+                      <?php else: ?><i class="bi bi-caret-down text-muted opacity-25"></i><?php endif; ?>
+                    </span>
+                  </th>
                   <th class="tx-col-method">Method</th>
-                  <th class="tx-col-description">Description</th>
+                  <th class="tx-col-description sortable" data-sort="description">
+                    Description
+                    <span class="sort-indicator">
+                      <?php if ($txSort === 'description_asc'): ?><i class="bi bi-caret-up-fill"></i>
+                      <?php elseif ($txSort === 'description_desc'): ?><i class="bi bi-caret-down-fill"></i>
+                      <?php else: ?><i class="bi bi-caret-up text-muted opacity-25"></i><?php endif; ?>
+                    </span>
+                  </th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -1222,6 +1297,44 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   });
   ['transactionTypeFilter','transactionSort','transactionPageSize'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', () => transactionFiltersForm?.requestSubmit());
+  });
+
+  // Handle column header clicks for sorting
+  document.querySelectorAll('.sortable').forEach(th => {
+    th.addEventListener('click', function() {
+      const sortField = this.dataset.sort;
+      if (!sortField) return;
+
+      const currentSort = new URLSearchParams(window.location.search).get('sort') || '';
+      let newSort;
+
+      // Toggle between asc and desc
+      if (currentSort === sortField + '_asc') {
+        newSort = sortField + '_desc';
+      } else {
+        newSort = sortField + '_asc';
+      }
+
+      // Update the sort dropdown value
+      const sortSelect = document.getElementById('transactionSort');
+      if (sortSelect) {
+        sortSelect.value = newSort;
+      }
+
+      // Update the URL and submit form
+      const url = new URL(window.location);
+      url.searchParams.set('sort', newSort);
+      url.searchParams.set('page', '1'); // Reset to page 1 on sort change
+      window.location.href = url.toString();
+    });
+
+    // Add keyboard support
+    th.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        this.click();
+      }
+    });
   });
   [['transactionSupplierSearch','transactionSupplierFilter'],['transactionClientSearch','transactionClientFilter']].forEach(([searchId, selectId]) => {
     const search = document.getElementById(searchId);
