@@ -338,12 +338,6 @@ if ($txType !== '' && !$txIsJson) {
   $txParams[] = $txType;
   $txTypes .= 's';
 }
-$txEditId = filter_var($_GET['edit_transaction'] ?? null, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]) ?: 0;
-if ($txEditId > 0 && !$txIsJson) {
-  $txWhere[] = 't.id=?';
-  $txParams[] = $txEditId;
-  $txTypes .= 'i';
-}
 $txWhereSql = $txWhere ? ' WHERE '.implode(' AND ', $txWhere) : '';
 $txTotal = 0;
 $txOffset = 0;
@@ -459,6 +453,130 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     @media (prefers-reduced-motion: reduce) {
       .transaction-type-filters .btn { transition: none; }
     }
+
+    /* Premium table styling */
+    .premium-table {
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .premium-table thead th {
+      background: linear-gradient(135deg, var(--mtn-dark), var(--mtn-darker));
+      color: white;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.5px;
+      border: none;
+      padding: 1rem;
+    }
+
+    .premium-table tbody tr {
+      transition: background-color 0.15s ease;
+    }
+
+    .premium-table tbody tr:hover {
+      background-color: rgba(255, 255, 255, 0.05);
+    }
+
+    .premium-table .badge {
+      font-weight: 500;
+      padding: 0.35em 0.65em;
+      font-size: 0.75rem;
+    }
+
+    .type-income { color: #198754; }
+    .type-expense { color: #dc3545; }
+    .type-invoice { color: #fd7e14; }
+    .type-payment { color: #0d6efd; }
+
+    .filter-panel {
+      background: rgba(255, 255, 255, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+
+    .filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 0.75rem;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 20px;
+      font-size: 0.875rem;
+      transition: all 0.2s ease;
+    }
+
+    .filter-chip:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .filter-chip .remove-btn {
+      cursor: pointer;
+      opacity: 0.7;
+      transition: opacity 0.2s;
+    }
+
+    .filter-chip .remove-btn:hover {
+      opacity: 1;
+    }
+
+    .summary-card {
+      border: none;
+      border-radius: 12px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05));
+      backdrop-filter: blur(10px);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .summary-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    .summary-card .value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: white;
+    }
+
+    .summary-card.income { background: linear-gradient(135deg, #198754, #0d6efd); }
+    .summary-card.expense { background: linear-gradient(135deg, #dc3545, #c82333); }
+    .summary-card.net { background: linear-gradient(135deg, #20c997, #0dcaf0); }
+    .summary-card.count { background: linear-gradient(135deg, #6c757d, #495057); }
+
+    @media (max-width: 768px) {
+      .premium-table {
+        font-size: 0.875rem;
+      }
+      .premium-table th, .premium-table td {
+        padding: 0.5rem;
+      }
+      .tx-col-client, .tx-col-supplier, .tx-col-description {
+        max-width: 100px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+
+    @media (max-width: 576px) {
+      .table-responsive {
+        border-radius: 8px;
+      }
+      .premium-table {
+        font-size: 0.8rem;
+      }
+      .premium-table th, .premium-table td {
+        padding: 0.4rem;
+      }
+      .premium-table .btn-sm {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.75rem;
+      }
+    }
   </style>
   <link rel="icon" href="../favicon/favicon.ico" sizes="any">
   <link rel="icon" type="image/svg+xml" href="../favicon/favicon.svg">
@@ -470,17 +588,41 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
   <?php $active_page='transactions'; include "../includes/layout/sidebar.php"; ?>
 
   <main class="main flex-grow-1 p-4">
-    <?php $page_title='Transactions'; $page_subtitle='Record income, expenses, invoices and payments'; $header_actions=''; include "../includes/layout/header.php"; ?>
+    <?php $page_title='Transactions'; $page_subtitle='Record income, expenses, invoices and payments'; $header_actions='<a class="btn btn-black me-2" href="#addTx"><i class="bi bi-plus-lg"></i> New Transaction</a>'; include "../includes/layout/header.php"; ?>
 
     <?php if ($message): ?>
       <div class="alert alert-info py-2" role="alert" aria-live="polite"><?= htmlspecialchars($message) ?></div>
     <?php endif; ?>
 
-    <div class="row g-2 mb-3" aria-label="Filtered transaction totals">
-      <div class="col-6 col-xl-3"><div class="card p-3 h-100"><div class="text-muted small">Matching transactions</div><div class="h5 mb-0"><?= number_format($txSummary['count']) ?></div><small class="text-muted">All filtered results</small></div></div>
-      <div class="col-6 col-xl-3"><div class="card p-3 h-100"><div class="text-muted small">Income</div><div class="h5 mb-0"><?= fmtCurrency($txSummary['income']) ?></div><small class="text-muted">Income and received payments</small></div></div>
-      <div class="col-6 col-xl-3"><div class="card p-3 h-100"><div class="text-muted small">Expenses</div><div class="h5 mb-0"><?= fmtCurrency($txSummary['expense']) ?></div><small class="text-muted">Matching expense records</small></div></div>
-      <div class="col-6 col-xl-3"><div class="card p-3 h-100"><div class="text-muted small">Net Movement</div><div class="h5 mb-0"><?= fmtCurrency($txSummary['income'] - $txSummary['expense']) ?></div><small class="text-muted">Income minus expenses</small></div></div>
+    <div class="row g-3 mb-4" aria-label="Transaction summary">
+      <div class="col-6 col-xl-3">
+        <div class="summary-card count p-3">
+          <div class="text-white-50 small">Matching Transactions</div>
+          <div class="value"><?= number_format($txSummary['count']) ?></div>
+          <div class="text-white-50 small">All filtered results</div>
+        </div>
+      </div>
+      <div class="col-6 col-xl-3">
+        <div class="summary-card income p-3">
+          <div class="text-white-50 small">Total Income</div>
+          <div class="value"><?= fmtCurrency($txSummary['income']) ?></div>
+          <div class="text-white-50 small">Income & payments</div>
+        </div>
+      </div>
+      <div class="col-6 col-xl-3">
+        <div class="summary-card expense p-3">
+          <div class="text-white-50 small">Total Expenses</div>
+          <div class="value"><?= fmtCurrency($txSummary['expense']) ?></div>
+          <div class="text-white-50 small">Matching expenses</div>
+        </div>
+      </div>
+      <div class="col-6 col-xl-3">
+        <div class="summary-card net p-3">
+          <div class="text-white-50 small">Net Movement</div>
+          <div class="value"><?= fmtCurrency($txSummary['income'] - $txSummary['expense']) ?></div>
+          <div class="text-white-50 small">Income minus expenses</div>
+        </div>
+      </div>
     </div>
 
     <div class="row g-3">
@@ -555,10 +697,28 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
           <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h2 class="h6 mb-1">Transactions</h2><p class="small text-muted mb-0">Search and filter posted financial activity.</p></div><div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-light" href="<?= htmlspecialchars('transactions.php?'.http_build_query($txQueryParams + ['export'=>'csv']), ENT_QUOTES, 'UTF-8') ?>"><i class="bi bi-download"></i> Export CSV</a><a class="btn btn-sm btn-outline-light" target="_blank" rel="noopener" href="<?= htmlspecialchars('transactions.php?'.http_build_query($txQueryParams + ['print'=>'1']), ENT_QUOTES, 'UTF-8') ?>"><i class="bi bi-printer"></i> Print</a><div class="dropdown"><button class="btn btn-sm btn-outline-light dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Choose visible columns">Columns</button><div class="dropdown-menu dropdown-menu-end p-2" id="transactionColumnMenu"><div class="small fw-semibold px-2 pb-1">Visible columns</div><?php foreach (['client'=>'Client','invoice'=>'Invoice','supplier'=>'Supplier','method'=>'Payment method','description'=>'Description'] as $key=>$label): ?><label class="dropdown-item-text d-flex align-items-center gap-2 py-1"><input class="form-check-input m-0 transaction-column-toggle" type="checkbox" data-column="<?= $key ?>" checked> <?= $label ?></label><?php endforeach; ?></div></div><a class="btn btn-sm btn-primary" href="#addTx"><i class="bi bi-plus-lg"></i> New Transaction</a><a class="btn btn-sm btn-outline-light" href="<?= htmlspecialchars('transactions.php?'.http_build_query($txQueryParams), ENT_QUOTES, 'UTF-8') ?>" aria-label="Refresh transaction results" title="Refresh"><i class="bi bi-arrow-clockwise"></i></a></div></div>
           <div class="table-responsive">
             <form method="GET" class="row g-2 mb-3" role="search" aria-label="Filter transactions">
-              <div class="col-md-7"><label class="visually-hidden" for="transactionSearch">Search transactions</label><div class="input-group input-group-sm"><input class="form-control" type="search" id="transactionSearch" name="q" value="<?= htmlspecialchars($txSearch, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search ID, client, supplier, invoice, method or description"><?php if ($txSearch !== ''): ?><a class="btn btn-outline-light" href="<?= htmlspecialchars('transactions.php?'.http_build_query(array_diff_key($txQueryParams, ['q'=>true])), ENT_QUOTES, 'UTF-8') ?>" aria-label="Clear search">Clear</a><?php endif; ?></div></div>
+              <div class="col-md-7">
+                <label class="visually-hidden" for="transactionSearch">Search transactions</label>
+                <div class="input-group input-group-sm">
+                  <input class="form-control" type="search" id="transactionSearch" name="q" value="<?= htmlspecialchars($txSearch, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search ID, client, supplier, invoice, method or description" aria-describedby="searchClearBtn">
+                  <?php if ($txSearch !== ''): ?>
+                    <button class="btn btn-outline-light" id="searchClearBtn" type="button" aria-label="Clear search">
+                      <i class="bi bi-x-lg"></i>
+                    </button>
+                  <?php endif; ?>
+                </div>
+              </div>
               <div class="col-md-3"><label class="visually-hidden" for="transactionTypeFilter">Transaction type</label><select class="form-select form-select-sm" id="transactionTypeFilter" name="type"><option value="">All types</option><?php foreach (['income'=>'Income','expense'=>'Expense','invoice'=>'Invoice','payment'=>'Payment'] as $value=>$label): ?><option value="<?= $value ?>" <?= $txType===$value?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
               <div class="col-md-2"><label class="visually-hidden" for="transactionSort">Sort transactions</label><select class="form-select form-select-sm" id="transactionSort" name="sort"><option value="date_desc" <?= $txSort==='date_desc'?'selected':'' ?>>Newest</option><option value="date_asc" <?= $txSort==='date_asc'?'selected':'' ?>>Oldest</option><option value="amount_desc" <?= $txSort==='amount_desc'?'selected':'' ?>>Highest amount</option><option value="amount_asc" <?= $txSort==='amount_asc'?'selected':'' ?>>Lowest amount</option><option value="type" <?= $txSort==='type'?'selected':'' ?>>Type</option><option value="client" <?= $txSort==='client'?'selected':'' ?>>Client</option><option value="supplier" <?= $txSort==='supplier'?'selected':'' ?>>Supplier</option></select></div>
-              <div class="col-12"><details <?= ($txStart || $txEnd || $txMinAmount !== '' || $txMaxAmount !== '' || $txMethod !== '' || $txSupplier || $txClient || $txNoSupplier || $txNoClient) ? 'open' : '' ?>><summary class="small fw-semibold py-2">Advanced filters</summary><div class="row g-2 pt-2">
+              <div class="col-12">
+                <details <?= ($txStart || $txEnd || $txMinAmount !== '' || $txMaxAmount !== '' || $txMethod !== '' || $txSupplier || $txClient || $txNoSupplier || $txNoClient) ? 'open' : '' ?> class="filter-panel">
+                  <summary class="small fw-semibold py-2" style="cursor: pointer;">
+                    <i class="bi bi-funnel me-2"></i>Advanced filters
+                    <?php if ($txStart || $txEnd || $txMinAmount !== '' || $txMaxAmount !== '' || $txMethod !== '' || $txSupplier || $txClient || $txNoSupplier || $txNoClient): ?>
+                      <span class="badge bg-primary ms-2">Active</span>
+                    <?php endif; ?>
+                  </summary>
+                  <div class="row g-2 pt-2">
                 <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionDatePreset">Date preset</label><select class="form-select form-select-sm" id="transactionDatePreset"><option value="">Custom range</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="this_week">This week</option><option value="last_week">Last week</option><option value="this_month">This month</option><option value="last_month">Last month</option><option value="this_year">This year</option></select></div>
                 <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionStart">From date</label><input class="form-control form-control-sm" type="date" id="transactionStart" name="start" value="<?= htmlspecialchars($txStart, ENT_QUOTES, 'UTF-8') ?>"></div>
                 <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionEnd">To date</label><input class="form-control form-control-sm" type="date" id="transactionEnd" name="end" value="<?= htmlspecialchars($txEnd, ENT_QUOTES, 'UTF-8') ?>"></div>
@@ -568,7 +728,9 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                 <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionSupplierSearch">Find supplier</label><input class="form-control form-control-sm mb-1" type="search" id="transactionSupplierSearch" placeholder="Type supplier name"><select class="form-select form-select-sm" id="transactionSupplierFilter" name="supplier"><option value="">All suppliers</option><?php foreach($allSuppliersArr as $s): ?><option value="<?= (int)$s['id'] ?>" data-search="<?= htmlspecialchars(mb_strtolower($s['business_name'].' '.$s['contact_person'].' '.$s['phone']), ENT_QUOTES, 'UTF-8') ?>" <?= $txSupplier===(int)$s['id']?'selected':'' ?>><?= htmlspecialchars($s['business_name'], ENT_QUOTES, 'UTF-8') ?></option><?php endforeach; ?></select><div class="form-check mt-1"><input class="form-check-input" type="checkbox" name="no_supplier" value="1" id="transactionNoSupplier" <?= $txNoSupplier?'checked':'' ?>><label class="form-check-label small" for="transactionNoSupplier">No supplier linked</label></div></div>
                 <div class="col-sm-6 col-lg-3"><label class="form-label small" for="transactionClientSearch">Find client</label><input class="form-control form-control-sm mb-1" type="search" id="transactionClientSearch" placeholder="Type client name"><select class="form-select form-select-sm" id="transactionClientFilter" name="client"><option value="">All clients</option><?php foreach($clientsArr as $c): ?><option value="<?= (int)$c['id'] ?>" data-search="<?= htmlspecialchars(mb_strtolower($c['full_name']), ENT_QUOTES, 'UTF-8') ?>" <?= $txClient===(int)$c['id']?'selected':'' ?>><?= htmlspecialchars($c['full_name'], ENT_QUOTES, 'UTF-8') ?></option><?php endforeach; ?></select><div class="form-check mt-1"><input class="form-check-input" type="checkbox" name="no_client" value="1" id="transactionNoClient" <?= $txNoClient?'checked':'' ?>><label class="form-check-label small" for="transactionNoClient">No client linked</label></div></div>
                 <div class="col-12 d-flex flex-wrap gap-2"><button class="btn btn-sm btn-primary">Apply Filters</button><a class="btn btn-sm btn-outline-light" href="transactions.php">Clear All Filters</a><label class="ms-auto small d-flex align-items-center gap-2" for="transactionPageSize">Rows per page<select class="form-select form-select-sm" id="transactionPageSize" name="page_size" style="width:auto"><option <?= $txPageSize===10?'selected':'' ?>>10</option><option <?= $txPageSize===25?'selected':'' ?>>25</option><option <?= $txPageSize===50?'selected':'' ?>>50</option><option <?= $txPageSize===100?'selected':'' ?>>100</option></select></label></div>
-              </div></details></div>
+                  </div>
+                </details>
+              </div>
             </form>
             <?php if ($txFilterError !== ''): ?><div class="alert alert-warning py-2" role="alert"><?= htmlspecialchars($txFilterError, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
             <div class="small text-muted mb-2">Active filters: <?= $txType !== '' || $txSearch !== '' || $txStart !== '' || $txEnd !== '' || $txMinAmount !== '' || $txMaxAmount !== '' || $txMethod !== '' || $txSupplier || $txClient || $txNoSupplier || $txNoClient ? 'Yes' : 'None' ?><?php if ($txType !== '' || $txSearch !== '' || $txStart !== '' || $txEnd !== '' || $txMinAmount !== '' || $txMaxAmount !== '' || $txMethod !== '' || $txSupplier || $txClient || $txNoSupplier || $txNoClient): ?> · <a href="transactions.php">Clear All Filters</a><?php endif; ?></div>
@@ -586,10 +748,10 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
               if ($txNoSupplier) $activeFilterLabels['no_supplier'] = 'No supplier';
               if ($txNoClient) $activeFilterLabels['no_client'] = 'No client';
             ?>
-            <?php if ($activeFilterLabels): ?><div class="d-flex flex-wrap gap-2 mb-2" aria-label="Active filter chips"><?php foreach ($activeFilterLabels as $filterKey=>$filterLabel): $withoutFilter = $txQueryParams; unset($withoutFilter[$filterKey]); ?><a class="badge rounded-pill text-bg-secondary text-decoration-none" href="<?= htmlspecialchars('transactions.php?'.http_build_query($withoutFilter), ENT_QUOTES, 'UTF-8') ?>" aria-label="Remove filter <?= htmlspecialchars($filterLabel, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($filterLabel, ENT_QUOTES, 'UTF-8') ?> ×</a><?php endforeach; ?></div><?php endif; ?>
-            <table id="transactionsTable" class="table table-borderless table-sm table-striped table-hover table-brand">
+            <?php if ($activeFilterLabels): ?><div class="d-flex flex-wrap gap-2 mb-3" aria-label="Active filter chips"><?php foreach ($activeFilterLabels as $filterKey=>$filterLabel): $withoutFilter = $txQueryParams; unset($withoutFilter[$filterKey]); ?><span class="filter-chip"><?= htmlspecialchars($filterLabel, ENT_QUOTES, 'UTF-8') ?><a class="remove-btn" href="<?= htmlspecialchars('transactions.php?'.http_build_query($withoutFilter), ENT_QUOTES, 'UTF-8') ?>" aria-label="Remove filter <?= htmlspecialchars($filterLabel, ENT_QUOTES, 'UTF-8') ?>"><i class="bi bi-x"></i></a></span><?php endforeach; ?><a class="filter-chip text-decoration-none" href="transactions.php">Clear All</a></div><?php endif; ?>
+            <table id="transactionsTable" class="table table-borderless table-sm table-striped table-hover premium-table">
               <thead>
-                <tr class="text-muted small">
+                <tr class="text-white">
                   <th>#</th>
                   <th class="tx-col-client">Client</th>
                   <th>Type</th>
@@ -604,54 +766,79 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
               </thead>
               <tbody>
                 <?php if ($txTotal === 0): ?>
-                  <tr><td colspan="10" class="text-center text-muted py-4">No transactions match this search. <a href="transactions.php">Clear filters</a> or record a transaction.</td></tr>
+                  <tr>
+                    <td colspan="10" class="text-center text-muted py-4">
+                      <i class="bi bi-inbox display-4 d-block mb-2"></i>
+                      No transactions match this search.
+                      <a href="transactions.php" class="btn btn-sm btn-outline-light mt-2">Clear filters</a>
+                      or record a transaction from the form.
+                    </td>
+                  </tr>
                 <?php endif; ?>
                 <?php while($t = $tx->fetch_assoc()): ?>
                 <tr>
-                  <td><?= (int)$t['id'] ?></td>
-                  <td class="tx-col-client"><?= htmlspecialchars($t['client'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
-                  <td class="text-capitalize"><?= htmlspecialchars($t['type']) ?></td>
+                  <td class="text-muted small"><?= (int)$t['id'] ?></td>
+                  <td class="tx-col-client text-truncate"><?= htmlspecialchars($t['client'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
+                  <td>
+                    <span class="badge bg-<?= $t['type'] === 'income' ? 'success' : ($t['type'] === 'expense' ? 'danger' : ($t['type'] === 'invoice' ? 'warning text-dark' : 'info')) ?> type-<?= $t['type'] ?>">
+                      <?= htmlspecialchars(ucfirst($t['type'])) ?>
+                    </span>
+                  </td>
                   <td class="text-muted small tx-col-invoice">
                     <?php if (!empty($t['invoice_number'])): ?>
                       <a class="link-light" href="invoice_view.php?id=<?= (int)$t['invoice_id'] ?>"><?= htmlspecialchars($t['invoice_number']) ?></a>
+                    <?php else: ?>
+                      —
                     <?php endif; ?>
                   </td>
-                  <td class="text-muted small tx-col-supplier"><?= htmlspecialchars($t['supplier_name'] ?? '') ?></td>
-                  <td><?= fmtCurrency((float)$t['amount']) ?></td>
+                  <td class="text-muted small tx-col-supplier text-truncate"><?= htmlspecialchars($t['supplier_name'] ?? '—') ?></td>
+                  <td class="fw-bold"><?= fmtCurrency((float)$t['amount']) ?></td>
                   <td class="text-muted small"><?= htmlspecialchars($t['date']) ?></td>
                   <td class="text-muted small tx-col-method"><?= htmlspecialchars(payment_method_label($t['payment_method'] ?? null)) ?></td>
-                  <td class="text-muted small tx-col-description"><?= htmlspecialchars($t['description'] ?? '') ?></td>
+                  <td class="text-muted small tx-col-description text-truncate" title="<?= htmlspecialchars($t['description'] ?? '', ENT_QUOTES) ?>">
+                    <?= htmlspecialchars($t['description'] ?? '—') ?>
+                  </td>
                   <td>
-                    <button type="button" class="btn btn-sm btn-outline-light transaction-actions"
-                      data-id="<?= (int)$t['id'] ?>" data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES, 'UTF-8') ?>"
-                      data-date="<?= htmlspecialchars($t['date'], ENT_QUOTES, 'UTF-8') ?>" data-description="<?= htmlspecialchars($t['description'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
-                      data-client="<?= htmlspecialchars($t['client'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-supplier="<?= htmlspecialchars($t['supplier_name'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
-                      data-invoice="<?= htmlspecialchars($t['invoice_number'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-amount="<?= htmlspecialchars(strip_tags(fmtCurrency((float)$t['amount'])), ENT_QUOTES, 'UTF-8') ?>"
-                      data-method="<?= htmlspecialchars(payment_method_label($t['payment_method'] ?? null), ENT_QUOTES, 'UTF-8') ?>"
-                      aria-label="Actions for transaction <?= (int)$t['id'] ?>"><i class="bi bi-three-dots"></i> Actions</button>
-                    <div class="d-none">
-                    <?php if (in_array($t['type'], ['income','payment'])): ?>
-                      <a class="transaction-receipt" href="receipt_view.php?id=<?= (int)$t['id'] ?>">Receipt</a>
-                    <?php endif; ?>
-                    <?php if (!empty($t['invoice_id'])): ?><a class="transaction-invoice" href="invoice_view.php?id=<?= (int)$t['invoice_id'] ?>">Invoice</a><?php endif; ?>
-                    <button type="button" class="btn-edit"
-                      data-id="<?= (int)$t['id'] ?>"
-                      data-client="<?= htmlspecialchars($t['client'] ?? '', ENT_QUOTES) ?>"
-                      data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES) ?>"
-                      data-invoice-id="<?= (int)($t['invoice_id'] ?? 0) ?>"
-                      data-invoice-number="<?= htmlspecialchars($t['invoice_number'] ?? '', ENT_QUOTES) ?>"
-                      data-supplier-id="<?= (int)($t['supplier_id'] ?? 0) ?>"
-                      data-amount="<?= htmlspecialchars($t['amount']) ?>"
-                      data-date="<?= htmlspecialchars($t['date']) ?>"
-                      data-method="<?= htmlspecialchars($t['payment_method'] ?? '', ENT_QUOTES) ?>"
-                      data-desc="<?= htmlspecialchars($t['description'] ?? '', ENT_QUOTES) ?>"
-                      aria-label="Edit transaction">Edit</button>
-                    <?php if ($t['type'] === 'payment' && !empty($t['invoice_id'])): ?><span class="badge bg-secondary" title="Posted invoice payments are preserved in financial history">Protected payment</span><?php else: ?><form method="POST" class="d-inline-block ms-1 tx-delete-form" data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES) ?>" data-invoice-id="<?= (int)($t['invoice_id'] ?? 0) ?>" data-invoice-number="<?= htmlspecialchars($t['invoice_number'] ?? '', ENT_QUOTES) ?>">
-                      <?= csrf_input() ?>
-                      <input type="hidden" name="action" value="delete">
-                      <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
-                      <button class="btn btn-sm btn-danger" aria-label="Delete transaction"><i class="bi bi-trash"></i></button>
-                    </form><?php endif; ?>
+                    <div class="dropdown">
+                      <button class="btn btn-sm btn-outline-light dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Actions for transaction <?= (int)$t['id'] ?>">
+                        <i class="bi bi-three-dots"></i>
+                      </button>
+                      <ul class="dropdown-menu dropdown-menu-end">
+                        <?php if (in_array($t['type'], ['income','payment'])): ?>
+                          <li><a class="dropdown-item" href="receipt_view.php?id=<?= (int)$t['id'] ?>"><i class="bi bi-receipt me-2"></i>Receipt</a></li>
+                        <?php endif; ?>
+                        <?php if (!empty($t['invoice_id'])): ?>
+                          <li><a class="dropdown-item" href="invoice_view.php?id=<?= (int)$t['invoice_id'] ?>"><i class="bi bi-file-earmark-text me-2"></i>Invoice</a></li>
+                        <?php endif; ?>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                          <button type="button" class="dropdown-item btn-edit"
+                            data-id="<?= (int)$t['id'] ?>"
+                            data-client="<?= htmlspecialchars($t['client'] ?? '', ENT_QUOTES) ?>"
+                            data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES) ?>"
+                            data-invoice-id="<?= (int)($t['invoice_id'] ?? 0) ?>"
+                            data-invoice-number="<?= htmlspecialchars($t['invoice_number'] ?? '', ENT_QUOTES) ?>"
+                            data-supplier-id="<?= (int)($t['supplier_id'] ?? 0) ?>"
+                            data-amount="<?= htmlspecialchars($t['amount']) ?>"
+                            data-date="<?= htmlspecialchars($t['date']) ?>"
+                            data-method="<?= htmlspecialchars($t['payment_method'] ?? '', ENT_QUOTES) ?>"
+                            data-desc="<?= htmlspecialchars($t['description'] ?? '', ENT_QUOTES) ?>">
+                            <i class="bi bi-pencil-square me-2"></i>Edit
+                          </button>
+                        </li>
+                        <?php if ($t['type'] === 'payment' && !empty($t['invoice_id'])): ?>
+                          <li><span class="dropdown-item text-muted"><i class="bi bi-shield-lock me-2"></i>Protected payment</span></li>
+                        <?php else: ?>
+                          <li>
+                            <form method="POST" class="tx-delete-form d-inline" data-type="<?= htmlspecialchars($t['type'], ENT_QUOTES) ?>" data-invoice-id="<?= (int)($t['invoice_id'] ?? 0) ?>" data-invoice-number="<?= htmlspecialchars($t['invoice_number'] ?? '', ENT_QUOTES) ?>">
+                              <?= csrf_input() ?>
+                              <input type="hidden" name="action" value="delete">
+                              <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
+                              <button class="dropdown-item text-danger" type="submit"><i class="bi bi-trash me-2"></i>Delete</button>
+                            </form>
+                          </li>
+                        <?php endif; ?>
+                      </ul>
                     </div>
                   </td>
                 </tr>
@@ -674,14 +861,6 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
 
     <footer class="mt-4 text-center text-muted small">© <?= date('Y') ?> LMG Creative Media</footer>
   </main>
-</div>
-
-<div class="modal fade" id="transactionActionsModal" tabindex="-1" aria-labelledby="transactionActionsTitle" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
-    <div class="modal-header"><h2 class="modal-title h5" id="transactionActionsTitle">Transaction details</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
-    <div class="modal-body"><dl class="row mb-0" id="transactionDetailsList"></dl><div class="alert alert-secondary py-2 mt-3 mb-0 d-none" id="protectedPaymentNotice">This posted invoice payment cannot be deleted. A validated correction is available through Edit Transaction.</div></div>
-    <div class="modal-footer flex-wrap justify-content-start"><a class="btn btn-sm btn-outline-light d-none" id="transactionInvoiceLink">View Invoice</a><a class="btn btn-sm btn-outline-light d-none" id="transactionReceiptLink">View Receipt</a><button type="button" class="btn btn-sm btn-outline-primary" id="transactionEditAction">Edit Transaction</button><button type="button" class="btn btn-sm btn-outline-danger" id="transactionDeleteAction">Delete Transaction</button></div>
-  </div></div>
 </div>
 
 <!-- Add Supplier Modal -->
@@ -870,6 +1049,27 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     });
   });
 
+  // Debounced search for transaction search input
+  const txSearchInput = document.getElementById('transactionSearch');
+  const searchClearBtn = document.getElementById('searchClearBtn');
+  let searchTimeout;
+
+  if (txSearchInput) {
+    txSearchInput.addEventListener('input', function() {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(function() {
+        txSearchInput.closest('form').submit();
+      }, 300);
+    });
+  }
+
+  if (searchClearBtn) {
+    searchClearBtn.addEventListener('click', function() {
+      txSearchInput.value = '';
+      txSearchInput.closest('form').submit();
+    });
+  }
+
   addSupplierBtn.addEventListener('click', function() {
     addSupplierBsModal.show();
   });
@@ -975,43 +1175,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     });
   })();
 
-  (function(){
-    const modalElement = document.getElementById('transactionActionsModal');
-    const modal = new bootstrap.Modal(modalElement);
-    const title = document.getElementById('transactionActionsTitle');
-    const details = document.getElementById('transactionDetailsList');
-    const editAction = document.getElementById('transactionEditAction');
-    const deleteAction = document.getElementById('transactionDeleteAction');
-    const receiptLink = document.getElementById('transactionReceiptLink');
-    const invoiceLink = document.getElementById('transactionInvoiceLink');
-    const protectedNotice = document.getElementById('protectedPaymentNotice');
-    let activeRow = null;
-    document.querySelectorAll('.transaction-actions').forEach(button => button.addEventListener('click', () => {
-      activeRow = button.closest('tr');
-      const data = button.dataset;
-      title.textContent = `Transaction #${data.id}`;
-      details.replaceChildren();
-      [['Date',data.date],['Type',data.type],['Description',data.description],['Client',data.client],['Supplier',data.supplier],['Invoice',data.invoice],['Payment method',data.method],['Amount',data.amount]].forEach(([label,value]) => {
-        const term = document.createElement('dt'); term.className = 'col-5 text-muted'; term.textContent = label;
-        const detail = document.createElement('dd'); detail.className = 'col-7'; detail.textContent = value || '—';
-        details.append(term, detail);
-      });
-      const receipt = activeRow.querySelector('.transaction-receipt');
-      receiptLink.classList.toggle('d-none', !receipt);
-      if (receipt) receiptLink.href = receipt.href;
-      const invoice = activeRow.querySelector('.transaction-invoice');
-      invoiceLink.classList.toggle('d-none', !invoice);
-      if (invoice) invoiceLink.href = invoice.href;
-      const protectedPayment = Boolean(activeRow.querySelector('.badge[title*="preserved"]'));
-      protectedNotice.classList.toggle('d-none', !protectedPayment);
-      editAction.disabled = false;
-      deleteAction.disabled = protectedPayment;
-      deleteAction.textContent = protectedPayment ? 'Protected payment' : 'Delete Transaction';
-      modal.show();
-    }));
-    editAction.addEventListener('click', () => { const edit = activeRow?.querySelector('.btn-edit'); if (edit) { modalElement.addEventListener('hidden.bs.modal', () => edit.click(), { once: true }); modal.hide(); } });
-    deleteAction.addEventListener('click', () => { const form = activeRow?.querySelector('.tx-delete-form'); if (form) form.requestSubmit(); });
-  })();
+
 
   // Handle transaction delete confirmations with appropriate warnings
   document.querySelectorAll('.tx-delete-form').forEach(function(form) {
@@ -1088,13 +1252,6 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     endInput.value = iso(end);
   });
 </script>
-<?php if (isset($_GET['edit_transaction']) && filter_var($_GET['edit_transaction'], FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]])): ?>
-<script>
-  document.addEventListener('DOMContentLoaded', function() {
-    document.querySelector('#transactionsTable .btn-edit')?.click();
-  });
-</script>
-<?php endif; ?>
 <script src="js/ui.js"></script>
 </body>
 </html>
