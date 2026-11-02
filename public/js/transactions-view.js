@@ -267,7 +267,7 @@ function openReceipt(transaction) {
         <img class="receipt-brand__logo" src="${assetUrl("images/logo.png")}" alt="LMG Creative Media logo">
         <div>
           <div class="receipt-brand__name">LMG Creative Media</div>
-          <div class="receipt-brand__tag">Professional Creative Solutions</div>
+          <div class="receipt-brand__tag">Bringing Creative Ideas to Life</div>
         </div>
       </div>
       <div class="receipt-heading">
@@ -544,8 +544,8 @@ function renderTransactionPagination(pageCount) {
   pagination.append(list);
 }
 
-function printTransactions() {
-  if (!filteredTransactions.length) {
+function printTransactions(rowsToPrint = filteredTransactions, selectedOnly = false) {
+  if (!rowsToPrint.length) {
     showNotice("There are no transactions to print for this search.", "warning");
     return;
   }
@@ -554,10 +554,10 @@ function printTransactions() {
     showNotice("Allow pop-ups to open the printable transaction table.", "warning");
     return;
   }
-  const rows = filteredTransactions.map((transaction) => `<tr>
+  const rows = rowsToPrint.map((transaction) => `<tr>
     <td>${escapeHtml(transaction.id)}</td>
-    <td>${escapeHtml(transaction.date || "")}</td>
-    <td>${escapeHtml(transaction.type || "")}</td>
+    <td>${escapeHtml(dateLabel(transaction.date) || "—")}</td>
+    <td><span class="type type--${escapeHtml(transaction.type || "other")}">${escapeHtml((transaction.type || "—").replace(/_/g, " "))}</span></td>
     <td>${escapeHtml(transaction.description || "—")}</td>
     <td>${escapeHtml(transaction.clients?.full_name || transaction.client_name || "—")}</td>
     <td>${escapeHtml(transaction.suppliers?.business_name || transaction.supplier_name || "—")}</td>
@@ -566,12 +566,44 @@ function printTransactions() {
     <td class="amount">${escapeHtml(`${currencySymbol}${Number(transaction.amount || 0).toFixed(2)}`)}</td>
   </tr>`).join("");
   const searchTerm = document.getElementById("transactionSearch").value.trim();
+  const period = document.getElementById("transactionPeriodLabel").textContent;
+  const activeFilters = [];
+  if (searchTerm) activeFilters.push(`Search: ${searchTerm}`);
+  const typeFilter = document.getElementById("transactionTypeFilter");
+  if (typeFilter.value !== "all") activeFilters.push(`Type: ${typeFilter.selectedOptions[0].textContent}`);
+  for (const [id, label] of [
+    ["transactionMethodFilter", "Payment method"],
+    ["transactionClientFilter", "Client"],
+    ["transactionSupplierFilter", "Supplier"],
+  ]) {
+    const filter = document.getElementById(id);
+    if (filter.value) activeFilters.push(`${label}: ${filter.selectedOptions[0].textContent}`);
+  }
+  const minimumAmount = document.getElementById("transactionMinAmount").value;
+  const maximumAmount = document.getElementById("transactionMaxAmount").value;
+  if (minimumAmount) activeFilters.push(`Minimum amount: ${currencySymbol}${Number(minimumAmount).toFixed(2)}`);
+  if (maximumAmount) activeFilters.push(`Maximum amount: ${currencySymbol}${Number(maximumAmount).toFixed(2)}`);
+  const dateFrom = document.getElementById("dateFrom").value;
+  const dateTo = document.getElementById("dateTo").value;
+  if (dateFrom || dateTo) activeFilters.push(`Dates: ${dateLabel(dateFrom) || "Beginning"} – ${dateLabel(dateTo) || "Today"}`);
+  const totals = rowsToPrint.reduce((result, transaction) => {
+    if (["income", "payment"].includes(transaction.type)) result.income += Number(transaction.amount || 0);
+    if (transaction.type === "expense") result.expense += Number(transaction.amount || 0);
+    return result;
+  }, { income: 0, expense: 0 });
+  const generated = new Date().toLocaleString();
+  const logo = assetUrl("images/logo.png");
+  const stylesheet = assetUrl("css/report-print.css");
   printWindow.document.open();
-  printWindow.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Transactions</title><style>
-    body{font:12px/1.4 Arial,sans-serif;color:#111;margin:24px}h1{font-size:20px;margin:0 0 4px}.meta{color:#555;margin-bottom:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:6px;text-align:left;vertical-align:top}th{background:#eee}.amount{text-align:right;white-space:nowrap}thead{display:table-header-group}tr{break-inside:avoid}@page{size:landscape;margin:12mm}@media print{body{margin:0}}
-  </style></head><body><h1>Transactions</h1><div class="meta">${filteredTransactions.length} matching transactions${searchTerm ? ` · Search: ${escapeHtml(searchTerm)}` : ""}</div><table><thead><tr><th>ID</th><th>Date</th><th>Type</th><th>Description</th><th>Client</th><th>Supplier</th><th>Invoice</th><th>Payment Method</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+  printWindow.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Transactions</title><link rel="stylesheet" href="${stylesheet}"></head><body><main class="print-document print-document--landscape transaction-print">
+    <header class="print-brand"><img src="${logo}" alt="LMG Creative Media"><div><strong>LMG Creative Media</strong><span>Bringing Creative Ideas to Life</span></div><div class="print-generated">Generated<br>${escapeHtml(generated)}</div></header>
+    <div class="print-heading"><h1>Transaction Register</h1><p>${escapeHtml(period)}</p><p>${selectedOnly ? "Selected transactions" : "All matching transactions"} · ${rowsToPrint.length} records</p>${activeFilters.length ? `<p>Filters: ${escapeHtml(activeFilters.join(" · "))}</p>` : ""}</div>
+    <div class="print-summary"><span><strong>Total income</strong>${escapeHtml(`${currencySymbol}${totals.income.toFixed(2)}`)}</span><span><strong>Total expenses</strong>${escapeHtml(`${currencySymbol}${totals.expense.toFixed(2)}`)}</span><span><strong>Net movement</strong>${escapeHtml(`${currencySymbol}${(totals.income - totals.expense).toFixed(2)}`)}</span><span><strong>Transactions</strong>${rowsToPrint.length}</span></div>
+    <table><thead><tr><th>ID</th><th>Date</th><th>Type</th><th>Description</th><th>Client</th><th>Supplier</th><th>Invoice</th><th>Payment method</th><th class="amount">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+    <footer class="print-footer">LMG Creative Media · Transaction Register · ${escapeHtml(generated)}</footer>
+    </main></body></html>`);
   printWindow.document.close();
-  window.setTimeout(() => printWindow.print(), 300);
+  printWindow.setTimeout(() => printWindow.print(), 500);
 }
 
 // Bulk actions functionality
@@ -648,11 +680,7 @@ document.getElementById("bulkPrint")?.addEventListener("click", function(e) {
     return;
   }
   const selected = filteredTransactions.filter(t => selectedIds.includes(String(t.id)));
-  // Reuse printTransactions with filtered selection
-  const originalFiltered = filteredTransactions;
-  filteredTransactions = selected;
-  printTransactions();
-  filteredTransactions = originalFiltered;
+  printTransactions(selected, true);
 });
 
 // Bulk delete

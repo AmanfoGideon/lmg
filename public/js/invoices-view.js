@@ -252,7 +252,7 @@ function buildPrintView(invoice) {
             <div>
               <img src="${assetUrl("images/logo.png")}" alt="LMG" style="width: 80px; margin-bottom: 15px;">
               <div class="brand-name">LMG Creative Media</div>
-              <div class="invoice-meta">Professional Creative Solutions</div>
+              <div class="invoice-meta">Bringing Creative Ideas to Life</div>
             </div>
             <div class="text-right">
               <div class="invoice-title">INVOICE</div>

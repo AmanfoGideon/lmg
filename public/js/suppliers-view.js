@@ -228,7 +228,7 @@ function printSuppliers() {
     </div>`;
   printWindow.document.open();
   printWindow.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Supplier Register</title><link rel="stylesheet" href="${stylesheet}"></head><body><main class="print-document print-document--landscape">
-    <header class="print-brand"><img src="${logo}" alt="LMG Creative Media"><div><strong>LMG Creative Media</strong><span>Professional Creative Solutions</span></div></header>
+    <header class="print-brand"><img src="${logo}" alt="LMG Creative Media"><div><strong>LMG Creative Media</strong><span>Bringing Creative Ideas to Life</span></div></header>
     <div class="print-heading"><h1>Supplier Register</h1><p>Generated ${escapeHtml(generated)} · ${filteredSuppliers.length} suppliers</p><p>Filters: ${escapeHtml(filters)}</p></div>
     ${summary}
     <table><thead><tr><th>Supplier</th><th>Contact details</th><th>Category</th><th>Amount spent</th><th>Bill purchases</th><th>Paid</th><th>Outstanding</th><th>Overdue</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>

@@ -114,6 +114,49 @@
   white-space: nowrap;
 }
 
+.transaction-print table {
+  table-layout: fixed;
+  font-size: 8pt;
+}
+
+.transaction-print th,
+.transaction-print td {
+  overflow-wrap: anywhere;
+}
+
+.transaction-print th:nth-child(1),
+.transaction-print td:nth-child(1) { width: 5%; }
+.transaction-print th:nth-child(2),
+.transaction-print td:nth-child(2) { width: 10%; }
+.transaction-print th:nth-child(3),
+.transaction-print td:nth-child(3) { width: 8%; }
+.transaction-print th:nth-child(4),
+.transaction-print td:nth-child(4) { width: 20%; }
+.transaction-print th:nth-child(5),
+.transaction-print td:nth-child(5),
+.transaction-print th:nth-child(6),
+.transaction-print td:nth-child(6) { width: 12%; }
+.transaction-print th:nth-child(7),
+.transaction-print td:nth-child(7) { width: 8%; }
+.transaction-print th:nth-child(8),
+.transaction-print td:nth-child(8) { width: 10%; }
+.transaction-print th:nth-child(9),
+.transaction-print td:nth-child(9) { width: 15%; }
+
+.transaction-print .type {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.transaction-print .type--expense {
+  color: #842029;
+}
+
+.transaction-print .type--income,
+.transaction-print .type--payment {
+  color: #146c43;
+}
+
 .print-document thead {
   display: table-header-group;
 }
