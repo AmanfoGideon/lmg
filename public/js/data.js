@@ -238,17 +238,29 @@ export async function getDashboard(period = "month") {
   return unwrap(await getSupabase().rpc("get_dashboard", { p_period: period }));
 }
 
-export async function listTransactions(limit = 100) {
+export async function listTransactions({ start = "", end = "" } = {}) {
   if (!isOnline()) {
-    return await listTransactionsOffline(limit);
+    return await listTransactionsOffline({ start, end });
   }
 
-  return unwrap(await getSupabase()
-    .from("transactions")
-    .select("id, client_id, type, amount, date, payment_method, description, invoice_id, supplier_id, clients(full_name), invoices(invoice_number), suppliers(business_name, status)")
-    .order("date", { ascending: false })
-    .order("id", { ascending: false })
-    .limit(limit));
+  const rows = [];
+  for (let offset = 0; ; offset += 1000) {
+    let query = getSupabase()
+      .from("transactions")
+      .select("id, client_id, type, amount, date, payment_method, description, invoice_id, supplier_id, clients(full_name), invoices(invoice_number), suppliers(business_name, status)")
+      .order("date", { ascending: false })
+      .order("id", { ascending: false })
+      .range(offset, offset + 999);
+    if (start) query = query.gte("date", start);
+    if (end) query = query.lte("date", end);
+    const { data, error } = await query;
+    if (error) throw error;
+    if (offset >= 10000 && data.length) {
+      throw new Error("More than 10,000 transactions match this date range. Narrow the date range before viewing them.");
+    }
+    rows.push(...data);
+    if (data.length < 1000) return rows;
+  }
 }
 
 export async function listActiveSuppliers() {

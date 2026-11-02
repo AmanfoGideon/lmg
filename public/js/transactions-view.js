@@ -17,11 +17,91 @@ let invoices = [];
 let suppliers = [];
 let transactions = [];
 let filteredTransactions = [];
+const selectedTransactionIds = new Set();
+let transactionPage = 1;
+const transactionPageSize = 50;
+let transactionLoadRequest = 0;
 let editModal;
 let createSupplierModal;
 let supplierModalTarget = "create";
 let supplierCreateBusy = false;
 const currencySymbol = globalThis.APP_CONFIG?.currencySymbol || "₵";
+const localDateValue = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+function setTransactionRange(start, end, preset, month = "") {
+  document.getElementById("dateFrom").value = start;
+  document.getElementById("dateTo").value = end;
+  document.getElementById("transactionPeriod").value = preset;
+  document.getElementById("transactionMonth").value = month;
+  transactionPage = 1;
+}
+
+function applyTransactionPreset(preset, now = new Date()) {
+  const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const today = localDateValue(now);
+  const monthValue = localDateValue(startOfThisMonth).slice(0, 7);
+  let start = "";
+  let end = "";
+  let month = "";
+
+  switch (preset) {
+    case "current_month":
+      start = localDateValue(startOfThisMonth);
+      end = today;
+      month = monthValue;
+      break;
+    case "previous_month":
+      start = localDateValue(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+      end = localDateValue(new Date(now.getFullYear(), now.getMonth(), 0));
+      month = start.slice(0, 7);
+      break;
+    case "last_3_months":
+      start = localDateValue(new Date(now.getFullYear(), now.getMonth() - 2, 1));
+      end = today;
+      break;
+    case "last_6_months":
+      start = localDateValue(new Date(now.getFullYear(), now.getMonth() - 5, 1));
+      end = today;
+      break;
+    case "this_year":
+      start = `${now.getFullYear()}-01-01`;
+      end = today;
+      break;
+    case "month":
+      document.getElementById("transactionMonth").focus();
+      return;
+    case "custom":
+      return;
+    case "all":
+      break;
+    default:
+      return;
+  }
+  setTransactionRange(start, end, preset, month);
+}
+
+function dateLabel(value) {
+  if (!value) return "";
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function updateTransactionPeriodLabel() {
+  const start = document.getElementById("dateFrom").value;
+  const end = document.getElementById("dateTo").value;
+  const preset = document.getElementById("transactionPeriod").value;
+  const label = document.getElementById("transactionPeriodLabel");
+  if (preset === "all" || (!start && !end)) {
+    label.textContent = "Transactions — All Dates";
+  } else if (["current_month", "previous_month", "month"].includes(preset) && start) {
+    const month = new Date(`${start}T00:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    label.textContent = `Transactions — ${month}`;
+  } else {
+    label.textContent = `Transactions — ${dateLabel(start) || "Beginning"} to ${dateLabel(end) || "Today"}`;
+  }
+}
 
 function makeRequestKey() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) => value.toString(16).padStart(2, "0")).join("");
@@ -39,6 +119,54 @@ function setSelectOptions(select, values, placeholder, selectedValue = "") {
   addOption(select, "", placeholder);
   values.forEach((item) => addOption(select, String(item.id), item.label));
   select.value = selectedValue;
+}
+
+function updateFilterOptions(select, values, placeholder) {
+  const selected = select.value;
+  select.replaceChildren();
+  addOption(select, "", placeholder);
+  values.forEach((item) => addOption(select, item.id, item.label));
+  if (values.some((item) => String(item.id) === selected)) select.value = selected;
+}
+
+function populateTransactionFilters() {
+  const methods = new Map([
+    ["cash", "Cash"],
+    ["mobile", "MoMo"],
+    ["card", "Card"],
+    ["unspecified", "Not specified"],
+  ]);
+  transactions.forEach((transaction) => {
+    const method = transaction.payment_method || "unspecified";
+    if (!methods.has(method)) methods.set(method, paymentMethodLabel(method));
+  });
+  updateFilterOptions(
+    document.getElementById("transactionMethodFilter"),
+    [...methods].map(([id, label]) => ({ id, label })),
+    "All methods",
+  );
+  updateFilterOptions(
+    document.getElementById("transactionClientFilter"),
+    [
+      ...clients.map((client) => ({ id: client.id, label: client.full_name })),
+      ...(transactions.some((transaction) => !transaction.client_id) ? [{ id: "__none__", label: "No client" }] : []),
+    ],
+    "All clients",
+  );
+  const supplierOptions = new Map(suppliers.map((supplier) => [String(supplier.id), supplier.business_name]));
+  transactions.forEach((transaction) => {
+    if (transaction.supplier_id) {
+      supplierOptions.set(String(transaction.supplier_id), transaction.suppliers?.business_name || transaction.supplier_name || "Supplier");
+    }
+  });
+  updateFilterOptions(
+    document.getElementById("transactionSupplierFilter"),
+    [
+      ...[...supplierOptions].map(([id, label]) => ({ id, label })),
+      ...(transactions.some((transaction) => !transaction.supplier_id) ? [{ id: "__none__", label: "No supplier" }] : []),
+    ],
+    "All suppliers",
+  );
 }
 
 function setSupplierOptions(select, selectedValue = "", currentSupplier = null) {
@@ -70,7 +198,12 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => 
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]
 ));
 const PAYMENT_METHOD_LABELS = { cash: "Cash", mobile: "MoMo", card: "Card", unspecified: "Not specified" };
-const paymentMethodLabel = (method) => method ? (PAYMENT_METHOD_LABELS[method] || String(method)) : "Not specified";
+const paymentMethodLabel = (method) => {
+  const value = String(method || "").trim();
+  if (!value) return "Not specified";
+  return PAYMENT_METHOD_LABELS[value.toLowerCase()]
+    || value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
 
 // Existing receipt numbering is preserved: RCPT-##### derived from the transaction id.
 const receiptNumber = (transaction) => `RCPT-${String(transaction.id).padStart(5, "0")}`;
@@ -237,22 +370,32 @@ function renderTransactions(query = "") {
   const dateFrom = document.getElementById("dateFrom").value;
   const dateTo = document.getElementById("dateTo").value;
   const sortBy = document.getElementById("sortBy").value;
+  const normalizedQuery = query.toLowerCase();
+  const typeFilter = document.getElementById("transactionTypeFilter").value;
+  const methodFilter = document.getElementById("transactionMethodFilter").value;
+  const clientFilter = document.getElementById("transactionClientFilter").value;
+  const supplierFilter = document.getElementById("transactionSupplierFilter").value;
+  const minimumAmount = document.getElementById("transactionMinAmount").value;
+  const maximumAmount = document.getElementById("transactionMaxAmount").value;
   
   let filtered = transactions.filter((transaction) => {
-    // Text search
-    const search = `${transaction.id} ${transaction.clients?.full_name || transaction.client_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.suppliers?.business_name || transaction.supplier_name || ""} ${paymentMethodLabel(transaction.payment_method)} ${transaction.description || ""}`;
-    const matchesSearch = search.toLowerCase().includes(query.toLowerCase());
-    
-    // Date filter
-    let matchesDate = true;
-    if (dateFrom && transaction.date) {
-      matchesDate = matchesDate && transaction.date >= dateFrom;
-    }
-    if (dateTo && transaction.date) {
-      matchesDate = matchesDate && transaction.date <= dateTo;
-    }
-    
-    return matchesSearch && matchesDate;
+    const search = `${transaction.id} ${transaction.clients?.full_name || transaction.client_name || ""} ${transaction.type} ${transaction.invoices?.invoice_number || ""} ${transaction.suppliers?.business_name || transaction.supplier_name || ""} ${paymentMethodLabel(transaction.payment_method)} ${transaction.description || ""} ${transaction.amount || ""}`;
+    const matchesSearch = search.toLowerCase().includes(normalizedQuery);
+    const matchesDate = (!dateFrom || transaction.date >= dateFrom)
+      && (!dateTo || transaction.date <= dateTo);
+    const matchesType = typeFilter === "all"
+      || (typeFilter === "income" && ["income", "payment"].includes(transaction.type))
+      || transaction.type === typeFilter;
+    const matchesMethod = !methodFilter || (transaction.payment_method || "unspecified") === methodFilter;
+    const matchesClient = !clientFilter
+      || (clientFilter === "__none__" ? !transaction.client_id : String(transaction.client_id || "") === clientFilter);
+    const matchesSupplier = !supplierFilter
+      || (supplierFilter === "__none__" ? !transaction.supplier_id : String(transaction.supplier_id || "") === supplierFilter);
+    const amount = Number(transaction.amount || 0);
+    const matchesAmount = (!minimumAmount || amount >= Number(minimumAmount))
+      && (!maximumAmount || amount <= Number(maximumAmount));
+    return matchesSearch && matchesDate && matchesType && matchesMethod
+      && matchesClient && matchesSupplier && matchesAmount;
   });
   
   // Apply sorting
@@ -278,11 +421,35 @@ function renderTransactions(query = "") {
   });
   
   filteredTransactions = filtered;
+  const income = filtered.reduce((sum, transaction) => (
+    ["income", "payment"].includes(transaction.type) ? sum + Number(transaction.amount || 0) : sum
+  ), 0);
+  const expense = filtered.reduce((sum, transaction) => (
+    transaction.type === "expense" ? sum + Number(transaction.amount || 0) : sum
+  ), 0);
+  document.getElementById("transactionIncomeTotal").textContent = `${currencySymbol}${income.toFixed(2)}`;
+  document.getElementById("transactionExpenseTotal").textContent = `${currencySymbol}${expense.toFixed(2)}`;
+  document.getElementById("transactionNetTotal").textContent = `${currencySymbol}${(income - expense).toFixed(2)}`;
+  document.getElementById("transactionMatchCount").textContent = String(filtered.length);
+  updateTransactionPeriodLabel();
+  const pageCount = Math.ceil(filtered.length / transactionPageSize);
+  transactionPage = Math.min(transactionPage, Math.max(pageCount, 1));
+  const firstResult = filtered.length ? (transactionPage - 1) * transactionPageSize + 1 : 0;
+  const lastResult = Math.min(transactionPage * transactionPageSize, filtered.length);
+  document.getElementById("transactionCount").textContent = `Showing ${firstResult}–${lastResult} of ${filtered.length} matching transaction${filtered.length === 1 ? "" : "s"}`;
+  renderTransactionPagination(pageCount);
   if (!filtered.length) {
-    setEmptyRow(body, 10, query || dateFrom || dateTo ? "No transactions match this search." : "No transactions have been recorded yet.");
+    if (selectAllCheckbox) selectAllCheckbox.checked = false;
+    const period = document.getElementById("transactionPeriodLabel").textContent.replace("Transactions — ", "");
+    setEmptyRow(body, 10, `No transactions found for ${period}. Select another month or adjust your filters to view historical transactions.`);
     return;
   }
-  body.replaceChildren(...filtered.map((transaction) => {
+  const pageRows = filtered.slice((transactionPage - 1) * transactionPageSize, transactionPage * transactionPageSize);
+  if (selectAllCheckbox) {
+    selectAllCheckbox.checked = pageRows.length > 0
+      && pageRows.every((transaction) => selectedTransactionIds.has(String(transaction.id)));
+  }
+  body.replaceChildren(...pageRows.map((transaction) => {
     const row = document.createElement("tr");
     // Add checkbox for bulk selection
     const checkboxCell = document.createElement("td");
@@ -290,6 +457,12 @@ function renderTransactions(query = "") {
     checkbox.type = "checkbox";
     checkbox.className = "form-check-input bulk-select";
     checkbox.value = transaction.id;
+    checkbox.checked = selectedTransactionIds.has(String(transaction.id));
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedTransactionIds.add(String(transaction.id));
+      else selectedTransactionIds.delete(String(transaction.id));
+      updateBulkActionsButton();
+    });
     checkboxCell.append(checkbox);
     row.append(checkboxCell);
     
@@ -340,6 +513,37 @@ function renderTransactions(query = "") {
   }));
 }
 
+function renderTransactionPagination(pageCount) {
+  const pagination = document.getElementById("transactionPagination");
+  pagination.replaceChildren();
+  if (pageCount <= 1) return;
+  const list = document.createElement("ul");
+  list.className = "pagination pagination-sm justify-content-end mb-0";
+  const addButton = (label, page, disabled, current = false) => {
+    const item = document.createElement("li");
+    item.className = `page-item${disabled ? " disabled" : ""}${current ? " active" : ""}`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "page-link";
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener("click", () => {
+      transactionPage = page;
+      renderTransactions(document.getElementById("transactionSearch").value.trim());
+    });
+    item.append(button);
+    list.append(item);
+  };
+  addButton("Previous", transactionPage - 1, transactionPage === 1);
+  const firstPage = Math.max(1, transactionPage - 2);
+  const lastPage = Math.min(pageCount, transactionPage + 2);
+  for (let page = firstPage; page <= lastPage; page++) {
+    addButton(String(page), page, false, page === transactionPage);
+  }
+  addButton("Next", transactionPage + 1, transactionPage === pageCount);
+  pagination.append(list);
+}
+
 function printTransactions() {
   if (!filteredTransactions.length) {
     showNotice("There are no transactions to print for this search.", "warning");
@@ -375,22 +579,19 @@ const selectAllCheckbox = document.getElementById("selectAllTx");
 const bulkActionsBtn = document.getElementById("bulkActionsBtn");
 
 function updateBulkActionsButton() {
-  const selectedCount = document.querySelectorAll(".bulk-select:checked").length;
-  bulkActionsBtn.disabled = selectedCount === 0;
+  bulkActionsBtn.disabled = selectedTransactionIds.size === 0;
 }
 
 if (selectAllCheckbox) {
   selectAllCheckbox.addEventListener("change", function() {
-    document.querySelectorAll(".bulk-select").forEach(cb => cb.checked = this.checked);
+    document.querySelectorAll(".bulk-select").forEach((checkbox) => {
+      checkbox.checked = this.checked;
+      if (this.checked) selectedTransactionIds.add(checkbox.value);
+      else selectedTransactionIds.delete(checkbox.value);
+    });
     updateBulkActionsButton();
   });
 }
-
-document.addEventListener("change", function(e) {
-  if (e.target.classList.contains("bulk-select")) {
-    updateBulkActionsButton();
-  }
-});
 
 // Export CSV
 document.getElementById("exportCsv")?.addEventListener("click", function() {
@@ -401,7 +602,7 @@ document.getElementById("exportCsv")?.addEventListener("click", function() {
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `transactions_${new Date().toISOString().split('T')[0]}.csv`;
+  link.download = `transactions_${localDateValue(new Date())}.csv`;
   link.click();
 });
 
@@ -414,14 +615,14 @@ document.getElementById("exportExcel")?.addEventListener("click", function() {
   const blob = new Blob([excel], { type: "application/vnd.ms-excel;charset=utf-8;" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `transactions_${new Date().toISOString().split('T')[0]}.xls`;
+  link.download = `transactions_${localDateValue(new Date())}.xls`;
   link.click();
 });
 
 // Bulk export
 document.getElementById("bulkExport")?.addEventListener("click", function(e) {
   e.preventDefault();
-  const selectedIds = Array.from(document.querySelectorAll(".bulk-select:checked")).map(cb => cb.value);
+  const selectedIds = Array.from(selectedTransactionIds);
   if (selectedIds.length === 0) {
     showNotice("Please select at least one transaction to export.", "warning");
     return;
@@ -434,14 +635,14 @@ document.getElementById("bulkExport")?.addEventListener("click", function(e) {
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `transactions_selected_${new Date().toISOString().split('T')[0]}.csv`;
+  link.download = `transactions_selected_${localDateValue(new Date())}.csv`;
   link.click();
 });
 
 // Bulk print
 document.getElementById("bulkPrint")?.addEventListener("click", function(e) {
   e.preventDefault();
-  const selectedIds = Array.from(document.querySelectorAll(".bulk-select:checked")).map(cb => cb.value);
+  const selectedIds = Array.from(selectedTransactionIds);
   if (selectedIds.length === 0) {
     showNotice("Please select at least one transaction to print.", "warning");
     return;
@@ -457,7 +658,7 @@ document.getElementById("bulkPrint")?.addEventListener("click", function(e) {
 // Bulk delete
 document.getElementById("bulkDelete")?.addEventListener("click", async function(e) {
   e.preventDefault();
-  const selectedIds = Array.from(document.querySelectorAll(".bulk-select:checked")).map(cb => cb.value);
+  const selectedIds = Array.from(selectedTransactionIds);
   if (selectedIds.length === 0) {
     showNotice("Please select at least one transaction to delete.", "warning");
     return;
@@ -475,6 +676,7 @@ document.getElementById("bulkDelete")?.addEventListener("click", async function(
     }
   }
   showNotice(`Deleted ${deletedCount} transaction(s).`);
+  selectedTransactionIds.clear();
   await loadTransactions();
   // Reset checkboxes
   selectAllCheckbox.checked = false;
@@ -482,12 +684,56 @@ document.getElementById("bulkDelete")?.addEventListener("click", async function(
 });
 
 // Date filter event listeners
-document.getElementById("dateFrom")?.addEventListener("change", function() {
+function renderAfterTransactionFilterChange() {
+  selectedTransactionIds.clear();
+  updateBulkActionsButton();
+  transactionPage = 1;
   renderTransactions(document.getElementById("transactionSearch").value.trim());
+}
+
+["transactionTypeFilter", "transactionMethodFilter", "transactionClientFilter", "transactionSupplierFilter"]
+  .forEach((id) => document.getElementById(id)?.addEventListener("change", renderAfterTransactionFilterChange));
+["transactionMinAmount", "transactionMaxAmount"]
+  .forEach((id) => document.getElementById(id)?.addEventListener("input", renderAfterTransactionFilterChange));
+
+document.getElementById("dateFrom")?.addEventListener("change", function() {
+  selectedTransactionIds.clear();
+  updateBulkActionsButton();
+  document.getElementById("transactionPeriod").value = "custom";
+  document.getElementById("transactionMonth").value = "";
+  transactionPage = 1;
+  loadTransactions();
 });
 
 document.getElementById("dateTo")?.addEventListener("change", function() {
-  renderTransactions(document.getElementById("transactionSearch").value.trim());
+  selectedTransactionIds.clear();
+  updateBulkActionsButton();
+  document.getElementById("transactionPeriod").value = "custom";
+  document.getElementById("transactionMonth").value = "";
+  transactionPage = 1;
+  loadTransactions();
+});
+
+document.getElementById("transactionPeriod")?.addEventListener("change", (event) => {
+  selectedTransactionIds.clear();
+  updateBulkActionsButton();
+  applyTransactionPreset(event.currentTarget.value);
+  if (event.currentTarget.value !== "custom" && event.currentTarget.value !== "month") loadTransactions();
+  else updateTransactionPeriodLabel();
+});
+
+document.getElementById("transactionMonth")?.addEventListener("change", (event) => {
+  if (!event.currentTarget.value) return;
+  selectedTransactionIds.clear();
+  updateBulkActionsButton();
+  const [year, month] = event.currentTarget.value.split("-").map(Number);
+  const start = localDateValue(new Date(year, month - 1, 1));
+  const now = new Date();
+  const end = year === now.getFullYear() && month === now.getMonth() + 1
+    ? localDateValue(now)
+    : localDateValue(new Date(year, month, 0));
+  setTransactionRange(start, end, "month", event.currentTarget.value);
+  loadTransactions();
 });
 
 // Sort event listener
@@ -497,10 +743,18 @@ document.getElementById("sortBy")?.addEventListener("change", function() {
 
 // Clear filters
 document.getElementById("clearFilters")?.addEventListener("click", function() {
+  selectedTransactionIds.clear();
+  updateBulkActionsButton();
   document.getElementById("transactionSearch").value = "";
-  document.getElementById("dateFrom").value = "";
-  document.getElementById("dateTo").value = "";
-  renderTransactions("");
+  document.getElementById("transactionTypeFilter").value = "all";
+  document.getElementById("transactionMethodFilter").value = "";
+  document.getElementById("transactionClientFilter").value = "";
+  document.getElementById("transactionSupplierFilter").value = "";
+  document.getElementById("transactionMinAmount").value = "";
+  document.getElementById("transactionMaxAmount").value = "";
+  transactionPage = 1;
+  applyTransactionPreset("current_month");
+  loadTransactions();
 });
 
 function openEdit(transaction) {
@@ -525,18 +779,47 @@ function openEdit(transaction) {
 }
 
 async function loadTransactions() {
+  const requestId = ++transactionLoadRequest;
+  const dateRange = {
+    start: document.getElementById("dateFrom").value,
+    end: document.getElementById("dateTo").value,
+  };
   const body = document.getElementById("transactionRows");
-  setEmptyRow(body, 9, "Loading transactions...");
+  setEmptyRow(body, 10, "Loading transactions...");
+  document.getElementById("transactionCount").textContent = "Loading transactions...";
+  document.getElementById("transactionIncomeTotal").textContent = "—";
+  document.getElementById("transactionExpenseTotal").textContent = "—";
+  document.getElementById("transactionNetTotal").textContent = "—";
+  document.getElementById("transactionMatchCount").textContent = "—";
+  updateTransactionPeriodLabel();
+  document.getElementById("transactionPagination").replaceChildren();
   try {
-    transactions = await listTransactions();
+    const rows = await listTransactions(dateRange);
+    if (requestId !== transactionLoadRequest) return;
+    transactions = rows;
+    populateTransactionFilters();
     renderTransactions(document.getElementById("transactionSearch").value.trim());
   } catch (error) {
-    setEmptyRow(body, 9, "Unable to load transactions.");
+    if (requestId !== transactionLoadRequest) return;
+    setEmptyRow(body, 10, "Unable to load transactions.");
+    transactions = [];
+    filteredTransactions = [];
+    selectedTransactionIds.clear();
+    document.getElementById("transactionIncomeTotal").textContent = `${currencySymbol}0.00`;
+    document.getElementById("transactionExpenseTotal").textContent = `${currencySymbol}0.00`;
+    document.getElementById("transactionNetTotal").textContent = `${currencySymbol}0.00`;
+    document.getElementById("transactionMatchCount").textContent = "0";
+    document.getElementById("transactionCount").textContent = "Transaction data unavailable";
+    document.getElementById("transactionPagination").replaceChildren();
+    if (selectAllCheckbox) selectAllCheckbox.checked = false;
+    updateTransactionPeriodLabel();
+    updateBulkActionsButton();
     showNotice(error.message || "Unable to load transactions.", "danger");
   }
 }
 
 export async function initTransactions() {
+  applyTransactionPreset("current_month");
   editModal = new Modal(document.getElementById("editTransactionModal"));
   const createSupplierModalElement = document.getElementById("createSupplierModal");
   createSupplierModal = new Modal(createSupplierModalElement);
@@ -674,7 +957,7 @@ export async function initTransactions() {
     setSelectOptions(document.getElementById("transactionInvoice"), invoiceOptions, "No linked invoice");
     setSelectOptions(document.getElementById("editTransactionInvoice"), invoiceOptions, "No linked invoice");
   });
-  document.getElementById("transactionDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("transactionDate").value = localDateValue(new Date());
 
   const form = document.getElementById("transactionForm");
   let transactionRequestKey = makeRequestKey();
@@ -699,7 +982,7 @@ export async function initTransactions() {
       transactionRequestKey = makeRequestKey();
       if (values.client_id === "__new__") window.dispatchEvent(new Event("lmg:clients-changed"));
       form.reset();
-      document.getElementById("transactionDate").value = new Date().toISOString().slice(0, 10);
+      document.getElementById("transactionDate").value = localDateValue(new Date());
       showNotice("Transaction added.");
       window.dispatchEvent(new Event("lmg:transactions-changed"));
       await loadTransactions();
@@ -737,7 +1020,12 @@ export async function initTransactions() {
       setFormBusy(formEl, false);
     }
   });
-  document.getElementById("transactionSearch").addEventListener("input", debounce((event) => renderTransactions(event.target.value.trim()), 200));
+  document.getElementById("transactionSearch").addEventListener("input", debounce((event) => {
+    selectedTransactionIds.clear();
+    updateBulkActionsButton();
+    transactionPage = 1;
+    renderTransactions(event.target.value.trim());
+  }, 200));
   document.getElementById("printTransactions").addEventListener("click", printTransactions);
   await loadTransactions();
 }

@@ -289,9 +289,23 @@ export async function deleteTransactionOffline(id) {
   }
 }
 
-export async function listTransactionsOffline(limit = 100) {
+export async function listTransactionsOffline({ start = "", end = "" } = {}) {
   const table = db.transactions;
-  return await table.orderBy("date").reverse().limit(limit).toArray();
+  const maximumRows = 10000;
+  let records;
+  if (start && end) {
+    records = await table.where("date").between(start, end, true, true).reverse().limit(maximumRows + 1).toArray();
+  } else if (start) {
+    records = await table.where("date").aboveOrEqual(start).reverse().limit(maximumRows + 1).toArray();
+  } else if (end) {
+    records = await table.where("date").belowOrEqual(end).reverse().limit(maximumRows + 1).toArray();
+  } else {
+    records = await table.orderBy("date").reverse().limit(maximumRows + 1).toArray();
+  }
+  if (records.length > maximumRows) {
+    throw new Error("More than 10,000 transactions match this date range. Narrow the date range before viewing them.");
+  }
+  return records;
 }
 
 /**
@@ -474,4 +488,3 @@ export async function markRecordSynced(tableName, id, serverData) {
     _version: serverData.updated_at || serverData.created_at,
   });
 }
-
