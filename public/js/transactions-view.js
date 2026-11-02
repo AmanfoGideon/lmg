@@ -1054,6 +1054,6 @@ export async function initTransactions() {
     transactionPage = 1;
     renderTransactions(event.target.value.trim());
   }, 200));
-  document.getElementById("printTransactions").addEventListener("click", printTransactions);
+  document.getElementById("printTransactions").addEventListener("click", () => printTransactions());
   await loadTransactions();
 }
