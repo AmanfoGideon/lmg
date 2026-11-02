@@ -140,8 +140,10 @@ function supplier_list(mysqli $conn, string $search = '', int $limit = 50, int $
           SUM(CASE WHEN sb.status IN ('unpaid','partial','overdue') AND sb.due_date<CURRENT_DATE THEN GREATEST(sb.total-COALESCE(a.allocated,0),0) ELSE 0 END) AS overdue_balance
         FROM supplier_bills sb
         LEFT JOIN (
-          SELECT bill_id, SUM(amount) AS allocated
-          FROM supplier_payment_allocations WHERE reversed_at IS NULL GROUP BY bill_id
+          SELECT spa.bill_id, SUM(spa.amount) AS allocated
+          FROM supplier_payment_allocations spa
+          JOIN supplier_payments sp ON sp.id=spa.payment_id AND sp.status<>'cancelled'
+          WHERE spa.reversed_at IS NULL GROUP BY spa.bill_id
         ) a ON a.bill_id=sb.id
         GROUP BY sb.supplier_id
       ) bills ON bills.supplier_id=s.id
@@ -192,7 +194,12 @@ function supplier_get_summary(mysqli $conn, int $supplier_id): array {
       COALESCE(SUM(CASE WHEN sb.status IN ('unpaid','partial','overdue') THEN GREATEST(sb.total - COALESCE(a.allocated, 0), 0) ELSE 0 END), 0) AS outstanding_balance,
       COALESCE(SUM(CASE WHEN sb.status IN ('unpaid','partial','overdue') AND sb.due_date < CURRENT_DATE THEN GREATEST(sb.total - COALESCE(a.allocated, 0), 0) ELSE 0 END), 0) AS overdue_balance
       FROM supplier_bills sb
-      LEFT JOIN (SELECT bill_id, SUM(amount) AS allocated FROM supplier_payment_allocations WHERE reversed_at IS NULL GROUP BY bill_id) a ON a.bill_id=sb.id
+      LEFT JOIN (
+        SELECT spa.bill_id, SUM(spa.amount) AS allocated
+        FROM supplier_payment_allocations spa
+        JOIN supplier_payments sp ON sp.id=spa.payment_id AND sp.status<>'cancelled'
+        WHERE spa.reversed_at IS NULL GROUP BY spa.bill_id
+      ) a ON a.bill_id=sb.id
       WHERE sb.supplier_id=?");
     $stmt->bind_param('i', $supplier_id);
     $stmt->execute();
@@ -1092,13 +1099,13 @@ function supplier_get_stats(mysqli $conn): array {
   }
 
   // Total outstanding
-  $res = $conn->query("SELECT COALESCE(SUM(GREATEST(sb.total - COALESCE(a.allocated, 0), 0)), 0) AS outstanding FROM supplier_bills sb LEFT JOIN (SELECT bill_id, SUM(amount) AS allocated FROM supplier_payment_allocations WHERE reversed_at IS NULL GROUP BY bill_id) a ON a.bill_id=sb.id WHERE sb.status IN ('unpaid', 'partial', 'overdue')");
+  $res = $conn->query("SELECT COALESCE(SUM(GREATEST(sb.total - COALESCE(a.allocated, 0), 0)), 0) AS outstanding FROM supplier_bills sb LEFT JOIN (SELECT spa.bill_id, SUM(spa.amount) AS allocated FROM supplier_payment_allocations spa JOIN supplier_payments sp ON sp.id=spa.payment_id AND sp.status<>'cancelled' WHERE spa.reversed_at IS NULL GROUP BY spa.bill_id) a ON a.bill_id=sb.id WHERE sb.status IN ('unpaid', 'partial', 'overdue')");
   if ($row = $res->fetch_assoc()) {
     $stats['total_outstanding'] = (float)$row['outstanding'];
   }
 
   // Total overdue
-  $res = $conn->query("SELECT COALESCE(SUM(GREATEST(sb.total - COALESCE(a.allocated, 0), 0)), 0) AS overdue FROM supplier_bills sb LEFT JOIN (SELECT bill_id, SUM(amount) AS allocated FROM supplier_payment_allocations WHERE reversed_at IS NULL GROUP BY bill_id) a ON a.bill_id=sb.id WHERE sb.status IN ('unpaid','partial','overdue') AND sb.due_date < CURRENT_DATE");
+  $res = $conn->query("SELECT COALESCE(SUM(GREATEST(sb.total - COALESCE(a.allocated, 0), 0)), 0) AS overdue FROM supplier_bills sb LEFT JOIN (SELECT spa.bill_id, SUM(spa.amount) AS allocated FROM supplier_payment_allocations spa JOIN supplier_payments sp ON sp.id=spa.payment_id AND sp.status<>'cancelled' WHERE spa.reversed_at IS NULL GROUP BY spa.bill_id) a ON a.bill_id=sb.id WHERE sb.status IN ('unpaid','partial','overdue') AND sb.due_date < CURRENT_DATE");
   if ($row = $res->fetch_assoc()) {
     $stats['total_overdue'] = (float)$row['overdue'];
   }
